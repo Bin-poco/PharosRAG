@@ -1,12 +1,14 @@
 """文档/任务关系数据库仓储测试。"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from pharos.jobs.models import OutboxRow
+from pharos.ingestion import UploadError
+from pharos.jobs.models import IngestionJobRow, OutboxRow, utcnow
 from pharos.jobs.dispatcher import CeleryJobDispatcher
 from pharos.jobs.repository import SQLJobRepository
 
@@ -92,4 +94,75 @@ def test_dispatcher_publishes_only_job_id_and_marks_outbox_sent(tmp_path):
 
     assert celery.calls == [("pharos.ingest_document", ["job_db1"], task_id)]
     assert record["celery_task_id"] == task_id
+    assert repository.list_pending_outbox() == []
+
+
+def test_retry_waits_until_available_and_next_worker_can_claim(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.claim_by_document("upload__db1", worker_id="worker-a")
+
+    assert repository.heartbeat("job_db1", "worker-b") is False
+    assert repository.heartbeat("job_db1", "worker-a") is True
+    retrying = repository.schedule_retry(
+        "upload__db1", error_code="mineru_timeout", delay_seconds=60,
+        expected_worker_id="worker-a")
+
+    assert retrying["job_status"] == "retrying"
+    assert retrying["stage"] == "waiting_retry"
+    assert retrying["attempts"] == 1
+    assert repository.list_pending_outbox() == []
+    assert repository.claim_by_document("upload__db1", worker_id="worker-b") is None
+
+    # 模拟退避时间已经过去，任务重新进入 Outbox 并可被另一个 Worker 领取。
+    available = utcnow() - timedelta(seconds=1)
+    with Session(repository.engine) as session, session.begin():
+        session.get(IngestionJobRow, "job_db1").available_at = available
+        session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1")).next_attempt_at = available
+    assert repository.list_pending_outbox() == ["job_db1"]
+    claimed = repository.claim_by_document("upload__db1", worker_id="worker-b")
+    assert claimed["attempts"] == 2 and claimed["worker_id"] == "worker-b"
+
+
+def test_worker_lease_prevents_stale_worker_from_overwriting_state(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.claim_by_document("upload__db1", worker_id="worker-a")
+
+    with pytest.raises(UploadError) as exc:
+        repository.update_by_document(
+            "upload__db1", expected_worker_id="worker-b", stage="embedding")
+    assert exc.value.code == "lease_lost"
+    assert repository.get_job("job_db1")["stage"] == "parsing"
+
+
+def test_stale_running_job_is_recovered_through_outbox(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.mark_outbox_sent("job_db1", "celery-1")
+    repository.claim_by_document("upload__db1", worker_id="dead-worker")
+    with Session(repository.engine) as session, session.begin():
+        session.get(IngestionJobRow, "job_db1").heartbeat_at = utcnow() - timedelta(minutes=10)
+
+    result = repository.recover_stale(stale_seconds=120)
+    record = repository.get_job("job_db1")
+
+    assert result == {"recovered": 1, "failed": 0}
+    assert record["job_status"] == "retrying"
+    assert record["error_code"] == "worker_lost"
+    assert repository.list_pending_outbox() == ["job_db1"]
+
+
+def test_retry_budget_exhaustion_is_terminal(tmp_path):
+    record = _record()
+    record["max_attempts"] = 1
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(record)
+    repository.claim_by_document("upload__db1", worker_id="worker-a")
+
+    failed = repository.schedule_retry(
+        "upload__db1", error_code="mineru_timeout", delay_seconds=10,
+        expected_worker_id="worker-a")
+    assert failed["job_status"] == "failed"
+    assert failed["status"] == "failed"
     assert repository.list_pending_outbox() == []

@@ -20,7 +20,7 @@ from typing import BinaryIO
 
 from embedder import Embedder
 
-from .ingestion import IngestionPipeline, UploadError
+from .ingestion import IngestionPipeline, UploadError, is_transient_ingestion_error
 from .jobs import FileJobRepository
 from .mineru import MinerUClient, MinerUError
 
@@ -71,6 +71,14 @@ def build_upload_acl(identity, access_scope: str, groups: list[str]) -> dict:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def retry_delay_seconds(attempt: int, job_id: str) -> int:
+    """指数退避并加入稳定抖动，防止一批故障任务同时冲击外部服务。"""
+    base = min(300, 10 * (3 ** max(0, int(attempt) - 1)))
+    spread = max(1, base // 5)
+    jitter = int(hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:8], 16) % spread
+    return base + jitter
 
 
 class DocumentUploadManager:
@@ -190,23 +198,44 @@ class DocumentUploadManager:
         """原子领取 queued 任务；重复调度不会并发重复建库。"""
         return self.repository.claim_by_document(document_id, worker_id=worker_id)
 
-    def process(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
-        """BackgroundTasks 入口。失败转持久化 failed，不把内部异常暴露给客户端。"""
+    def process(self, document_id: str, *, worker_id: str | None = None,
+                retry_on_transient: bool = False) -> dict | None:
+        """执行一次摄取；队列模式下瞬态故障进入延迟重试而非直接失败。"""
         try:
             record = self._claim(document_id, worker_id=worker_id)
             if record is None:
                 current = self.repository.get_by_document(document_id)
                 return self.public_record(current) if current else None
             stats = self._get_pipeline().run(
-                record, lambda **changes: self._update(document_id, **changes))
+                record, lambda **changes: self._update(
+                    document_id, expected_worker_id=worker_id, **changes))
             self._update(document_id, status="ready", stage="ready",
                          chunk_count=stats["chunk_count"],
-                         parser_batch_id=stats.get("parser_batch_id"))
+                         parser_batch_id=stats.get("parser_batch_id"),
+                         expected_worker_id=worker_id)
         except Exception as exc:
             code = exc.code if isinstance(exc, (UploadError, MinerUError)) else "index_failed"
+            if code == "lease_lost":
+                log.warning("upload lease lost: doc=%s worker=%s", document_id, worker_id)
+                current = self.repository.get_by_document(document_id)
+                return self.public_record(current) if current else None
             log.exception("upload processing failed: doc=%s code=%s", document_id, code)
             try:
-                self._update(document_id, status="failed", stage="failed", error_code=code)
+                current = self.repository.get_by_document(document_id)
+                if (retry_on_transient and current and
+                        is_transient_ingestion_error(exc) and
+                        hasattr(self.repository, "schedule_retry")):
+                    delay = retry_delay_seconds(current.get("attempts", 1), current["job_id"])
+                    self.repository.schedule_retry(
+                        document_id, error_code=code, delay_seconds=delay,
+                        expected_worker_id=worker_id)
+                    log.warning(
+                        "upload retry scheduled: doc=%s job=%s attempt=%s delay=%ss code=%s",
+                        document_id, current["job_id"], current.get("attempts"), delay, code)
+                else:
+                    self._update(
+                        document_id, status="failed", stage="failed", error_code=code,
+                        expected_worker_id=worker_id)
             except Exception:
                 log.exception("upload failure state could not be persisted: doc=%s", document_id)
         current = self.repository.get_by_document(document_id)

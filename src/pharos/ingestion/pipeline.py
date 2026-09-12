@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import threading
 from pathlib import Path
 from typing import Callable
@@ -53,40 +55,52 @@ class IngestionPipeline:
         document_id = record["document_id"]
         source = Path(record["source_path"])
         title = Path(record["filename"]).stem
-        parsed_dir = self._doc_dir(document_id) / "parsed"
-        parsed_dir.mkdir(parents=True, exist_ok=True)
+        doc_dir = self._doc_dir(document_id)
+        parsed_dir = doc_dir / "parsed"
+        attempt = int(record.get("attempts", 1))
+        attempt_dir = doc_dir / f".parsed-{record['job_id']}-{attempt}.tmp"
+        shutil.rmtree(attempt_dir, ignore_errors=True)
+        attempt_dir.mkdir(parents=True, exist_ok=False)
         layout = None
+        try:
+            if record.get("source_format") == "pdf":
+                if self.mineru_client is None:
+                    raise MinerUError("mineru_unconfigured", "PDF 上传尚未配置 MinerU 客户端。")
+                update_stage(stage="mineru_parsing")
+                parsed = self.mineru_client.parse_pdf(source, attempt_dir, data_id=document_id)
+                content = json.loads(parsed.content_list_path.read_text(encoding="utf-8"))
+                if parsed.layout_path:
+                    layout = json.loads(parsed.layout_path.read_text(encoding="utf-8"))
+                image_relative = parsed.content_root.relative_to(attempt_dir)
+                parser_batch_id = parsed.batch_id
+            else:
+                try:
+                    markdown = source.read_text(encoding="utf-8")
+                except UnicodeDecodeError as exc:
+                    raise UploadError("invalid_encoding", "Markdown 必须是 UTF-8 编码。") from exc
+                content = markdown_to_content_list(markdown, title=title, source_url="")
+                (attempt_dir / f"{document_id}_content_list.json").write_text(
+                    json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                image_relative = Path(".")
+                parser_batch_id = None
 
-        if record.get("source_format") == "pdf":
-            if self.mineru_client is None:
-                raise MinerUError("mineru_unconfigured", "PDF 上传尚未配置 MinerU 客户端。")
-            update_stage(stage="mineru_parsing")
-            parsed = self.mineru_client.parse_pdf(source, parsed_dir, data_id=document_id)
-            content = json.loads(parsed.content_list_path.read_text(encoding="utf-8"))
-            if parsed.layout_path:
-                layout = json.loads(parsed.layout_path.read_text(encoding="utf-8"))
-            image_root = parsed.content_root
-            parser_batch_id = parsed.batch_id
-        else:
-            try:
-                markdown = source.read_text(encoding="utf-8")
-            except UnicodeDecodeError as exc:
-                raise UploadError("invalid_encoding", "Markdown 必须是 UTF-8 编码。") from exc
-            content = markdown_to_content_list(markdown, title=title, source_url="")
-            (parsed_dir / f"{document_id}_content_list.json").write_text(
-                json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            image_root = parsed_dir
-            parser_batch_id = None
+            metadata = {
+                "doc_id": document_id,
+                "title": title,
+                "source_format": record["source_format"],
+                "content_sha256": record["sha256"],
+                "original_filename": record["filename"],
+            }
+            (attempt_dir / "metadata.json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-        metadata = {
-            "doc_id": document_id,
-            "title": title,
-            "source_format": record["source_format"],
-            "content_sha256": record["sha256"],
-            "original_filename": record["filename"],
-        }
-        (parsed_dir / "metadata.json").write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            # 只有完整解析成功后才替换正式产物；失败尝试不会污染下一次执行。
+            shutil.rmtree(parsed_dir, ignore_errors=True)
+            os.replace(attempt_dir, parsed_dir)
+            image_root = parsed_dir / image_relative
+        except Exception:
+            shutil.rmtree(attempt_dir, ignore_errors=True)
+            raise
 
         update_stage(stage="chunking", parser_batch_id=parser_batch_id)
         elements = from_mineru(content, layout)

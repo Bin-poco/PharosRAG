@@ -32,6 +32,11 @@ def build_celery_app(cfg=None) -> Celery:
                 "schedule": 30.0,
                 "args": (100,),
             },
+            "recover-stale-ingestion-jobs": {
+                "task": "pharos.recover_stale_jobs",
+                "schedule": 30.0,
+                "args": (100,),
+            },
         },
     )
     return app

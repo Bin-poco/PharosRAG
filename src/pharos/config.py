@@ -100,6 +100,8 @@ class PharosConfig:
     database_url: str = ""       # 文档/任务状态库；空时保留 JSON 本地兼容模式
     job_max_attempts: int = 3
     redis_url: str = ""          # Celery broker；非空时上传不再使用进程内 BackgroundTasks
+    job_heartbeat_seconds: int = 15
+    job_stale_seconds: int = 120
     job_visibility_timeout: int = 3600
     job_soft_time_limit: int = 2100
     job_time_limit: int = 2400
@@ -165,6 +167,8 @@ def from_env() -> PharosConfig:
         database_url=os.environ.get("PHAROS_DATABASE_URL", "").strip(),
         job_max_attempts=_int_env("PHAROS_JOB_MAX_ATTEMPTS", 3),
         redis_url=os.environ.get("PHAROS_REDIS_URL", "").strip(),
+        job_heartbeat_seconds=_int_env("PHAROS_JOB_HEARTBEAT_SECONDS", 15),
+        job_stale_seconds=_int_env("PHAROS_JOB_STALE_SECONDS", 120),
         job_visibility_timeout=_int_env("PHAROS_JOB_VISIBILITY_TIMEOUT", 3600),
         job_soft_time_limit=_int_env("PHAROS_JOB_SOFT_TIME_LIMIT", 2100),
         job_time_limit=_int_env("PHAROS_JOB_TIME_LIMIT", 2400),

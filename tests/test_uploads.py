@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from _fakes import FakeRetriever, make_app, make_cfg
 from pharos.identity import Identity
+from pharos.jobs import SQLJobRepository
 from pharos.mineru import MinerUResult
 from pharos.uploads import DocumentUploadManager, UploadError, build_upload_acl
 
@@ -150,6 +151,28 @@ def test_pdf_upload_is_rejected_before_queue_when_mineru_is_unconfigured(tmp_pat
                        access_scope="private", groups=[])
     assert exc.value.code == "mineru_unconfigured"
     assert not list((tmp_path / "uploads").glob("upload__*"))
+
+
+def test_transient_pipeline_failure_is_scheduled_for_retry(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    manager = DocumentUploadManager(
+        str(tmp_path / "uploads"), SimpleNamespace(), repository=repository, max_attempts=3)
+    record = manager.create(
+        io.BytesIO(b"# Retry"), filename="retry.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[])
+
+    class FailingPipeline:
+        def run(self, record, update_stage):
+            raise ConnectionError("temporary inference outage")
+
+    manager._pipeline = FailingPipeline()
+    result = manager.process(
+        record["document_id"], worker_id="worker-a", retry_on_transient=True)
+
+    assert result["job_status"] == "retrying"
+    assert result["status"] == "queued"
+    assert result["stage"] == "waiting_retry"
+    assert result["attempts"] == 1
 
 
 class FakeUploadManager:

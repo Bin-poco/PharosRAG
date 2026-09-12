@@ -88,11 +88,16 @@ class FileJobRepository:
         with self._lock:
             return self._read(document_id)
 
-    def update_by_document(self, document_id: str, **changes) -> dict:
+    def update_by_document(self, document_id: str, *, expected_worker_id: str | None = None,
+                           **changes) -> dict:
         with self._lock:
             record = self._read(document_id)
             if record is None:
                 raise UploadError("not_found", "文档任务不存在。")
+            if (expected_worker_id is not None and
+                    (record.get("status") != "running" or
+                     record.get("worker_id") != expected_worker_id)):
+                raise UploadError("lease_lost", "任务执行权已转交给其他 Worker。")
             record.update(changes)
             record["updated_at"] = utcnow().isoformat()
             self._write(record)
@@ -116,6 +121,17 @@ class FileJobRepository:
             )
             self._write(record)
             return record
+
+    def heartbeat(self, job_id: str, worker_id: str) -> bool:
+        with self._lock:
+            record = self.get_job(job_id)
+            if not record or record.get("status") != "running":
+                return False
+            if record.get("worker_id") not in {None, worker_id}:
+                return False
+            record["heartbeat_at"] = utcnow().isoformat()
+            self._write(record)
+            return True
 
 
 class SQLJobRepository:
@@ -241,13 +257,17 @@ class SQLJobRepository:
             session.flush()
             return self._record(document, job)
 
-    def update_by_document(self, document_id: str, **changes) -> dict:
+    def update_by_document(self, document_id: str, *, expected_worker_id: str | None = None,
+                           **changes) -> dict:
         now = utcnow()
         with Session(self.engine) as session, session.begin():
             row = self._load(session, document_id=document_id, for_update=True)
             if not row:
                 raise UploadError("not_found", "文档任务不存在。")
             job, document = row
+            if (expected_worker_id is not None and
+                    (job.status != "running" or job.worker_id != expected_worker_id)):
+                raise UploadError("lease_lost", "任务执行权已转交给其他 Worker。")
             if "stage" in changes:
                 job.stage = changes["stage"]
             if "parser_batch_id" in changes:
@@ -278,11 +298,112 @@ class SQLJobRepository:
         now = utcnow()
         with Session(self.engine) as session:
             statement = (select(OutboxRow.job_id)
+                         .join(IngestionJobRow, IngestionJobRow.job_id == OutboxRow.job_id)
                          .where(OutboxRow.status == "pending",
-                                OutboxRow.next_attempt_at <= now)
+                                OutboxRow.next_attempt_at <= now,
+                                IngestionJobRow.available_at <= now,
+                                IngestionJobRow.status.in_({"queued", "retrying"}))
                          .order_by(OutboxRow.id)
                          .limit(max(1, min(int(limit), 1000))))
             return list(session.scalars(statement))
+
+    def heartbeat(self, job_id: str, worker_id: str) -> bool:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            job = session.scalar(
+                select(IngestionJobRow).where(
+                    IngestionJobRow.job_id == job_id,
+                    IngestionJobRow.status == "running",
+                    IngestionJobRow.worker_id == worker_id,
+                ).with_for_update())
+            if job is None:
+                return False
+            job.heartbeat_at = now
+            job.updated_at = now
+            return True
+
+    def schedule_retry(self, document_id: str, *, error_code: str, delay_seconds: int,
+                       expected_worker_id: str | None = None) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档任务不存在。")
+            job, document = row
+            if (expected_worker_id is not None and
+                    (job.status != "running" or job.worker_id != expected_worker_id)):
+                raise UploadError("lease_lost", "任务执行权已转交给其他 Worker。")
+            if job.attempts >= job.max_attempts:
+                job.status = "failed"
+                job.stage = "failed"
+                job.error_code = error_code
+                job.error_message = None
+                job.finished_at = now
+                document.status = "failed"
+            else:
+                available = now + timedelta(seconds=max(1, int(delay_seconds)))
+                job.status = "retrying"
+                job.stage = "waiting_retry"
+                job.error_code = error_code
+                job.error_message = None
+                job.available_at = available
+                job.worker_id = None
+                document.status = "queued"
+                outbox = session.scalar(
+                    select(OutboxRow).where(OutboxRow.job_id == job.job_id).with_for_update())
+                if outbox is not None:
+                    outbox.status = "pending"
+                    outbox.next_attempt_at = available
+                    outbox.sent_at = None
+                    outbox.last_error = None
+                    outbox.updated_at = now
+            job.heartbeat_at = now
+            job.updated_at = now
+            document.updated_at = now
+            session.flush()
+            return self._record(document, job)
+
+    def recover_stale(self, stale_seconds: int, limit: int = 100) -> dict:
+        now = utcnow()
+        cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
+        recovered = failed = 0
+        with Session(self.engine) as session, session.begin():
+            jobs = list(session.scalars(
+                select(IngestionJobRow)
+                .where(IngestionJobRow.status == "running",
+                       IngestionJobRow.heartbeat_at < cutoff)
+                .order_by(IngestionJobRow.heartbeat_at)
+                .limit(max(1, min(int(limit), 1000)))
+                .with_for_update(skip_locked=True)))
+            for job in jobs:
+                document = session.get(DocumentRow, job.document_id)
+                if document is None:
+                    continue
+                if job.attempts >= job.max_attempts:
+                    job.status = "failed"
+                    job.stage = "failed"
+                    job.error_code = "worker_lost"
+                    job.finished_at = now
+                    document.status = "failed"
+                    failed += 1
+                else:
+                    job.status = "retrying"
+                    job.stage = "waiting_retry"
+                    job.error_code = "worker_lost"
+                    job.available_at = now
+                    job.worker_id = None
+                    document.status = "queued"
+                    outbox = session.scalar(
+                        select(OutboxRow).where(OutboxRow.job_id == job.job_id).with_for_update())
+                    if outbox is not None:
+                        outbox.status = "pending"
+                        outbox.next_attempt_at = now
+                        outbox.sent_at = None
+                        outbox.updated_at = now
+                    recovered += 1
+                job.updated_at = now
+                document.updated_at = now
+        return {"recovered": recovered, "failed": failed}
 
     def mark_outbox_sent(self, job_id: str, celery_task_id: str) -> None:
         now = utcnow()
