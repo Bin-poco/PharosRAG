@@ -50,6 +50,10 @@ class IngestionPipeline:
                 )
             return self._embedder
 
+    def delete_index(self, document_id: str) -> None:
+        """删除一篇文档的 Qdrant points 与 sidecar；供生命周期管理复用。"""
+        self._get_embedder().delete_document(document_id)
+
     def run(self, record: dict, update_stage: StageCallback) -> dict:
         """处理一条已领取的任务，成功返回索引统计，失败原样抛给执行器。"""
         document_id = record["document_id"]

@@ -47,9 +47,11 @@ failed --(人工 retry，创建新 job)--> queued
 
 文档状态与任务状态刻意分开：
 
-- `document.status`: `queued | processing | ready | failed`，回答“文档现在能否使用”；
-- `ingestion_job.status`: `queued | running | retrying | succeeded | failed`，回答“这次任务如何执行”；
-- `stage`: `uploaded | parsing | mineru_parsing | chunking | embedding | waiting_retry | ready | failed`，用于定位耗时和故障位置。
+- `document.status`: `queued | processing | ready | failed | updating_access | access_update_failed | deleting | delete_failed | deleted`，回答“文档现在能否使用”；
+- `ingestion_job.status`: `held | queued | running | retrying | succeeded | failed`，回答“这次任务如何执行”；`held` 只用于权限修改时先占住文档，不能被 Worker 领取；
+- `stage`: `access_update_pending | access_update_failed | uploaded | parsing | mineru_parsing | chunking | embedding | waiting_retry | ready | failed`，用于定位耗时和故障位置。
+
+重建、权限修改和软删除的完整状态转换见 [DOCUMENT_LIFECYCLE.md](DOCUMENT_LIFECYCLE.md)。
 
 ## 自动重试边界
 
@@ -67,6 +69,9 @@ failed --(人工 retry，创建新 job)--> queued
 4. 被判失联的旧 Worker 又恢复：它的 `worker_id` 已失效，租约校验拒绝它覆盖新 Worker 状态。
 5. MinerU/在线推理暂时超时：任务进入 `waiting_retry`，到期后 Outbox 再次投递。
 6. Worker 在领取前遇到数据库短暂中断：Celery 对同一 `job_id` 退避重试；若消息长期未被领取，Outbox 对账再次补投。
+7. 权限修改在占位后进程退出：没有 Outbox 的 `held` 任务不会误执行；stale recovery 将它转为
+   `access_update_failed`，用户可重新发起修改。
+8. 删除清理中进程退出：stale recovery 将 `deleting` 转为 `delete_failed`，重复 DELETE 从幂等清理继续。
 
 这里采用“至少一次投递 + 业务幂等”，不是假设消息永远只来一次。`doc_id` 和 `chunk_id` 稳定，
 重建同一文档时 Embedder 会先删除该文档旧 point，再用确定性 ID 写入，并原子替换 sidecar。

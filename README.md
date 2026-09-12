@@ -77,7 +77,9 @@ the server derives tenant/owner ACL from the API key, indexes in the background,
 `GET /v1/jobs/{job_id}`. PostgreSQL, Redis and Celery provide durable state, delayed retry, Worker heartbeat and
 stale-job recovery; failed jobs can be restarted without losing their history. See
 [the API guide](docs/API.md#post-v1documents--上传并建库keys-模式) and
-[the reliable-job design](docs/RELIABLE_UPLOAD_JOBS.md).
+[the reliable-job design](docs/RELIABLE_UPLOAD_JOBS.md). The management API also supports tenant-scoped upload
+inventory, reindexing, fail-closed ACL changes and auditable soft deletion; see
+[document lifecycle management](docs/DOCUMENT_LIFECYCLE.md).
 
 ```bash
 conda activate pharos

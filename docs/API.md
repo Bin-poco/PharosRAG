@@ -125,6 +125,44 @@ PDF 常见失败码：`mineru_unconfigured`、`mineru_upload_failed`、`mineru_p
 
 可靠任务的完整状态机、重试边界和故障恢复见 [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
 
+### GET /v1/uploads —— 上传管理清单(keys 模式)
+
+这是 PostgreSQL/JSON 管理清单，和 `GET /v1/documents` 的“当前可检索库存”不是同一个接口。
+普通用户只看到自己上传的文档；同 tenant admin 可看到全部。它会包含尚未进入 Qdrant 的
+`queued/processing/failed` 记录，默认隐藏软删除记录。
+
+查询参数：`include_deleted=false`、`limit=100`（最大 500）、`offset=0`。
+
+### POST /v1/documents/{document_id}/reindex
+
+上传者或同 tenant admin 可从保留的原文件创建新摄取任务，响应 `202 accepted`。旧索引在解析、
+切块和编码期间继续可用，到 Embedder 提交新版本时才短暂执行 `delete -> upsert -> sidecar replace`；
+旧任务历史继续保存在 PostgreSQL。文档已有活动任务时返回 `409 document_busy`。
+
+### PATCH /v1/documents/{document_id}/access
+
+请求 JSON：
+
+```json
+{"access_scope":"restricted", "groups":["g_eng"]}
+```
+
+权限规则与上传一致。服务先在数据库创建不可领取的 `held` 任务来独占该文档，再删除旧 Qdrant
+points 与 sidecar，最后以新 ACL 激活重建任务。这样权限收紧时不会出现数据库已更新、旧向量仍按
+宽权限可检索的窗口。旧索引清理失败则记录 `access_update_failed`，不提交新 ACL；中断的 `held`
+任务会由现有 stale recovery 标记失败，之后可重试。
+权限修改失败后应重新提交本接口（再次明确目标权限）；通用的 `POST /v1/jobs/{job_id}/retry` 会拒绝
+这类任务，避免在目标 ACL 未保存时误用旧 ACL 重建。
+
+### DELETE /v1/documents/{document_id}
+
+上传者或同 tenant admin 可删除。操作同步清理 Qdrant points、sidecar 与本地原文件/解析产物，
+数据库文档和任务历史采用软删除保留审计。活动任务期间返回 `409 document_busy`；瞬态清理失败时
+记录 `delete_failed` 并返回可重试的 `503`，重复 DELETE 会继续执行幂等清理。默认管理清单不再
+显示已删除文档，`GET /v1/uploads?include_deleted=true` 可查看。
+
+生命周期设计与一致性边界见 [DOCUMENT_LIFECYCLE.md](DOCUMENT_LIFECYCLE.md)。
+
 ### GET /v1/documents/{doc_id}?max_tokens=6000
 通读整篇(逐元素 ACL 门控):`{status, doc_id, text, n_tokens, n_elements_visible, truncated, trust, warning}`
 

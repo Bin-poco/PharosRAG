@@ -88,6 +88,131 @@ class FileJobRepository:
         with self._lock:
             return self._read(document_id)
 
+    def list_documents(self, *, tenant: str, owner: str | None = None,
+                       include_deleted: bool = False, limit: int = 100,
+                       offset: int = 0) -> list[dict]:
+        records = []
+        with self._lock:
+            for path in self.root.glob("upload__*/record.json"):
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if record.get("tenant") != tenant:
+                    continue
+                if owner is not None and record.get("owner") != owner:
+                    continue
+                if not include_deleted and record.get("status") == "deleted":
+                    continue
+                records.append(record)
+        records.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+        start = max(0, int(offset))
+        return records[start:start + max(1, min(int(limit), 500))]
+
+    def enqueue_reindex(self, document_id: str, *, new_job_id: str, max_attempts: int,
+                        access_scope: str | None = None, groups: list[str] | None = None,
+                        acl: dict | None = None) -> dict:
+        with self._lock:
+            record = self._read(document_id)
+            if record is None:
+                raise UploadError("not_found", "文档不存在。")
+            if record.get("status") in {
+                "queued", "running", "processing", "deleting", "updating_access"
+            }:
+                raise UploadError("document_busy", "文档正在处理中，请稍后重试。")
+            if record.get("status") == "deleted":
+                raise UploadError("document_deleted", "已删除文档不能重新建库。")
+            now = utcnow().isoformat()
+            record.update(
+                job_id=new_job_id, status="queued", job_status="queued", stage="uploaded",
+                attempts=0, max_attempts=max(1, int(max_attempts)), worker_id=None,
+                celery_task_id=None, error_code=None, started_at=None, heartbeat_at=None,
+                finished_at=None, updated_at=now,
+            )
+            if access_scope is not None:
+                record.update(access_scope=access_scope, groups=list(groups or []), acl=dict(acl or {}))
+            self._write(record)
+            return record
+
+    def prepare_access_update(self, document_id: str, *, new_job_id: str,
+                              max_attempts: int) -> dict:
+        """先占住文档但不投递任务，防止旧索引下线期间并发重建或删除。"""
+        with self._lock:
+            record = self._read(document_id)
+            if record is None:
+                raise UploadError("not_found", "文档不存在。")
+            if record.get("status") in {
+                "queued", "running", "processing", "deleting", "updating_access"
+            }:
+                raise UploadError("document_busy", "文档正在处理中，请稍后重试。")
+            if record.get("status") == "deleted":
+                raise UploadError("document_deleted", "已删除文档不能修改权限。")
+            now = utcnow().isoformat()
+            record.update(
+                job_id=new_job_id, status="updating_access", job_status="held",
+                stage="access_update_pending", attempts=0,
+                max_attempts=max(1, int(max_attempts)), worker_id=None,
+                celery_task_id=None, error_code=None, started_at=None,
+                heartbeat_at=None, finished_at=None, updated_at=now,
+            )
+            self._write(record)
+            return record
+
+    def activate_access_update(self, document_id: str, *, job_id: str,
+                               access_scope: str, groups: list[str], acl: dict) -> dict:
+        with self._lock:
+            record = self._read(document_id)
+            if (record is None or record.get("job_id") != job_id or
+                    record.get("job_status") != "held"):
+                raise UploadError("lifecycle_conflict", "权限修改任务已失去执行权。")
+            record.update(
+                access_scope=access_scope, groups=list(groups), acl=dict(acl),
+                status="queued", job_status="queued", stage="uploaded",
+                chunk_count=0, parser_batch_id=None, updated_at=utcnow().isoformat(),
+            )
+            self._write(record)
+            return record
+
+    def fail_access_update(self, document_id: str, *, job_id: str,
+                           error_code: str) -> None:
+        with self._lock:
+            record = self._read(document_id)
+            if (record is None or record.get("job_id") != job_id or
+                    record.get("job_status") != "held"):
+                return
+            now = utcnow().isoformat()
+            record.update(
+                status="access_update_failed", job_status="failed",
+                stage="access_update_failed", error_code=error_code,
+                finished_at=now, updated_at=now,
+            )
+            self._write(record)
+
+    def begin_delete(self, document_id: str) -> dict:
+        with self._lock:
+            record = self._read(document_id)
+            if record is None:
+                raise UploadError("not_found", "文档不存在。")
+            if record.get("status") == "deleted":
+                return record
+            if record.get("status") in {
+                "queued", "running", "processing", "updating_access"
+            }:
+                raise UploadError("document_busy", "文档正在处理中，不能删除。")
+            record["status"] = "deleting"
+            record["updated_at"] = utcnow().isoformat()
+            self._write(record)
+            return record
+
+    def finish_delete(self, document_id: str) -> dict:
+        return self.update_by_document(document_id, status="deleted", chunk_count=0)
+
+    def fail_delete(self, document_id: str) -> None:
+        try:
+            self.update_by_document(document_id, status="delete_failed")
+        except UploadError:
+            pass
+
     def update_by_document(self, document_id: str, *, expected_worker_id: str | None = None,
                            **changes) -> dict:
         with self._lock:
@@ -162,6 +287,9 @@ class FileJobRepository:
                 raise UploadError("not_found", "文档任务不存在。")
             if record.get("job_status", record.get("status")) != "failed":
                 raise UploadError("job_not_retryable", "只有失败任务可以手动重试。")
+            if record.get("stage") == "access_update_failed":
+                raise UploadError(
+                    "job_not_retryable", "权限修改失败需重新提交 PATCH access，不能盲目重放旧 ACL。")
             now = utcnow().isoformat()
             record.update(
                 job_id=new_job_id, status="queued", job_status="queued", stage="uploaded",
@@ -272,6 +400,182 @@ class SQLJobRepository:
         with Session(self.engine) as session:
             row = self._load(session, document_id=document_id)
             return self._record(row[1], row[0]) if row else None
+
+    def list_documents(self, *, tenant: str, owner: str | None = None,
+                       include_deleted: bool = False, limit: int = 100,
+                       offset: int = 0) -> list[dict]:
+        with Session(self.engine) as session:
+            statement = (select(IngestionJobRow, DocumentRow)
+                         .join(DocumentRow, DocumentRow.document_id == IngestionJobRow.document_id)
+                         .where(DocumentRow.current_job_id == IngestionJobRow.job_id,
+                                DocumentRow.tenant == tenant))
+            if owner is not None:
+                statement = statement.where(DocumentRow.owner == owner)
+            if not include_deleted:
+                statement = statement.where(DocumentRow.status != "deleted")
+            statement = (statement.order_by(DocumentRow.created_at.desc())
+                         .offset(max(0, int(offset)))
+                         .limit(max(1, min(int(limit), 500))))
+            return [self._record(document, job)
+                    for job, document in session.execute(statement)]
+
+    @staticmethod
+    def _enqueue_job(session: Session, document: DocumentRow, *, new_job_id: str,
+                     max_attempts: int, now: datetime) -> IngestionJobRow:
+        job = IngestionJobRow(
+            job_id=new_job_id, document_id=document.document_id,
+            status="queued", stage="uploaded", attempts=0,
+            max_attempts=max(1, int(max_attempts)), available_at=now,
+            created_at=now, updated_at=now,
+        )
+        session.add(job)
+        session.flush()
+        document.current_job_id = new_job_id
+        document.status = "queued"
+        document.updated_at = now
+        session.add(OutboxRow(
+            job_id=new_job_id, event_type="ingestion.requested",
+            payload={"job_id": new_job_id}, status="pending", attempts=0,
+            next_attempt_at=now, created_at=now, updated_at=now,
+        ))
+        session.flush()
+        return job
+
+    def enqueue_reindex(self, document_id: str, *, new_job_id: str, max_attempts: int,
+                        access_scope: str | None = None, groups: list[str] | None = None,
+                        acl: dict | None = None) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档不存在。")
+            current_job, document = row
+            if current_job.status in {"held", "queued", "retrying", "running"}:
+                raise UploadError("document_busy", "文档正在处理中，请稍后重试。")
+            if document.status in {"deleting", "delete_failed"}:
+                raise UploadError("document_busy", "文档正在删除，不能重新建库。")
+            if document.status == "deleted":
+                raise UploadError("document_deleted", "已删除文档不能重新建库。")
+            if access_scope is not None:
+                document.access_scope = access_scope
+                document.groups = list(groups or [])
+                document.acl = dict(acl or {})
+            job = self._enqueue_job(
+                session, document, new_job_id=new_job_id,
+                max_attempts=max_attempts, now=now)
+            return self._record(document, job)
+
+    def prepare_access_update(self, document_id: str, *, new_job_id: str,
+                              max_attempts: int) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档不存在。")
+            current_job, document = row
+            if current_job.status in {"held", "queued", "retrying", "running"}:
+                raise UploadError("document_busy", "文档正在处理中，请稍后重试。")
+            if document.status in {"deleting", "delete_failed"}:
+                raise UploadError("document_busy", "文档正在删除，不能修改权限。")
+            if document.status == "deleted":
+                raise UploadError("document_deleted", "已删除文档不能修改权限。")
+            job = IngestionJobRow(
+                job_id=new_job_id, document_id=document.document_id,
+                status="held", stage="access_update_pending", attempts=0,
+                max_attempts=max(1, int(max_attempts)), available_at=now,
+                created_at=now, updated_at=now,
+            )
+            session.add(job)
+            session.flush()
+            document.current_job_id = new_job_id
+            document.status = "updating_access"
+            document.updated_at = now
+            session.flush()
+            return self._record(document, job)
+
+    def activate_access_update(self, document_id: str, *, job_id: str,
+                               access_scope: str, groups: list[str], acl: dict) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档不存在。")
+            job, document = row
+            if job.job_id != job_id or job.status != "held":
+                raise UploadError("lifecycle_conflict", "权限修改任务已失去执行权。")
+            document.access_scope = access_scope
+            document.groups = list(groups)
+            document.acl = dict(acl)
+            document.status = "queued"
+            document.chunk_count = 0
+            document.parser_batch_id = None
+            document.updated_at = now
+            job.status = "queued"
+            job.stage = "uploaded"
+            job.updated_at = now
+            session.add(OutboxRow(
+                job_id=job_id, event_type="ingestion.requested",
+                payload={"job_id": job_id}, status="pending", attempts=0,
+                next_attempt_at=now, created_at=now, updated_at=now,
+            ))
+            session.flush()
+            return self._record(document, job)
+
+    def fail_access_update(self, document_id: str, *, job_id: str,
+                           error_code: str) -> None:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                return
+            job, document = row
+            if job.job_id != job_id or job.status != "held":
+                return
+            document.status = "access_update_failed"
+            document.updated_at = now
+            job.status = "failed"
+            job.stage = "access_update_failed"
+            job.error_code = error_code
+            job.finished_at = now
+            job.updated_at = now
+
+    def begin_delete(self, document_id: str) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档不存在。")
+            job, document = row
+            if document.status == "deleted":
+                return self._record(document, job)
+            if job.status in {"held", "queued", "retrying", "running"}:
+                raise UploadError("document_busy", "文档正在处理中，不能删除。")
+            document.status = "deleting"
+            document.updated_at = now
+            return self._record(document, job)
+
+    def finish_delete(self, document_id: str) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档不存在。")
+            job, document = row
+            document.status = "deleted"
+            document.chunk_count = 0
+            document.updated_at = now
+            return self._record(document, job)
+
+    def fail_delete(self, document_id: str) -> None:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, document_id=document_id, for_update=True)
+            if not row:
+                return
+            job, document = row
+            if document.status == "deleting":
+                document.status = "delete_failed"
+                document.updated_at = now
 
     def _claim_row(self, session: Session, row, *, worker_id: str | None = None,
                    require_current: bool = True) -> dict | None:
@@ -451,8 +755,11 @@ class SQLJobRepository:
         publishing_cutoff = now - timedelta(seconds=max(1, int(publishing_stale_seconds)))
         recovered = 0
         with Session(self.engine) as session, session.begin():
-            rows = list(session.execute(
-                select(OutboxRow, IngestionJobRow)
+            # 先只找候选 id，再逐条按 job -> outbox 的全局固定顺序加锁。
+            # 直接对 outbox join job 做 FOR UPDATE 时，数据库执行计划可能先锁 outbox，
+            # 与 Worker 的 job -> outbox 顺序相反，仍可能形成死锁。
+            job_ids = list(session.scalars(
+                select(OutboxRow.job_id)
                 .join(IngestionJobRow, IngestionJobRow.job_id == OutboxRow.job_id)
                 .where(
                     or_(
@@ -466,9 +773,29 @@ class SQLJobRepository:
                     IngestionJobRow.available_at <= now,
                 )
                 .order_by(OutboxRow.updated_at)
-                .limit(max(1, min(int(limit), 1000)))
-                .with_for_update(skip_locked=True)))
-            for outbox, job in rows:
+                .limit(max(1, min(int(limit), 1000)))))
+            for job_id in job_ids:
+                job = session.scalar(
+                    select(IngestionJobRow)
+                    .where(IngestionJobRow.job_id == job_id)
+                    .with_for_update(skip_locked=True))
+                if job is None:
+                    continue
+                outbox = session.scalar(
+                    select(OutboxRow)
+                    .where(OutboxRow.job_id == job_id)
+                    .with_for_update(skip_locked=True))
+                if outbox is None:
+                    continue
+                # 候选查询与取得行锁之间状态可能已经变化，锁内必须重新校验。
+                stale_sent = (outbox.status == "sent" and outbox.sent_at is not None and
+                              _aware(outbox.sent_at) < sent_cutoff)
+                stale_publishing = (outbox.status == "publishing" and
+                                    _aware(outbox.updated_at) < publishing_cutoff)
+                if (not (stale_sent or stale_publishing) or
+                        job.status not in {"queued", "retrying"} or
+                        _aware(job.available_at) > now):
+                    continue
                 outbox.status = "pending"
                 outbox.next_attempt_at = now
                 outbox.sent_at = None
@@ -519,6 +846,42 @@ class SQLJobRepository:
                     recovered += 1
                 job.updated_at = now
                 document.updated_at = now
+
+            # 权限修改在同步 HTTP 请求内完成；若进程恰好在“占位”后退出，held 不会被
+            # Worker 领取。超时后明确标成可见失败，用户即可安全重试，而不是永久 busy。
+            held_jobs = list(session.scalars(
+                select(IngestionJobRow)
+                .where(IngestionJobRow.status == "held",
+                       IngestionJobRow.updated_at < cutoff)
+                .order_by(IngestionJobRow.updated_at)
+                .limit(max(1, min(int(limit), 1000)))
+                .with_for_update(skip_locked=True)))
+            for job in held_jobs:
+                document = session.get(DocumentRow, job.document_id)
+                if document is None or document.current_job_id != job.job_id:
+                    continue
+                job.status = "failed"
+                job.stage = "access_update_failed"
+                job.error_code = "access_update_interrupted"
+                job.finished_at = now
+                job.updated_at = now
+                document.status = "access_update_failed"
+                document.updated_at = now
+                failed += 1
+
+            # 删除同样是同步清理；进程中断后保留 delete_failed，下一次 DELETE 会从
+            # 幂等的 Qdrant/sidecar/本地文件清理继续执行。
+            deleting_documents = list(session.scalars(
+                select(DocumentRow)
+                .where(DocumentRow.status == "deleting",
+                       DocumentRow.updated_at < cutoff)
+                .order_by(DocumentRow.updated_at)
+                .limit(max(1, min(int(limit), 1000)))
+                .with_for_update(skip_locked=True)))
+            for document in deleting_documents:
+                document.status = "delete_failed"
+                document.updated_at = now
+                failed += 1
         return {"recovered": recovered, "failed": failed}
 
     def retry_failed(self, job_id: str, *, new_job_id: str, max_attempts: int) -> dict:
@@ -530,6 +893,9 @@ class SQLJobRepository:
             old_job, document = row
             if document.current_job_id != old_job.job_id or old_job.status != "failed":
                 raise UploadError("job_not_retryable", "只有当前失败任务可以手动重试。")
+            if old_job.stage == "access_update_failed":
+                raise UploadError(
+                    "job_not_retryable", "权限修改失败需重新提交 PATCH access，不能盲目重放旧 ACL。")
             job = IngestionJobRow(
                 job_id=new_job_id, document_id=document.document_id,
                 status="queued", stage="uploaded", attempts=0,
@@ -554,9 +920,12 @@ class SQLJobRepository:
     def mark_outbox_sent(self, job_id: str, celery_task_id: str) -> None:
         now = utcnow()
         with Session(self.engine) as session, session.begin():
+            # 与 Worker 领取任务的 _claim_row 保持同一锁序：job -> outbox。
+            # 若这里反过来先锁 outbox，极速 Worker 会形成
+            # API(outbox 等 job) <-> Worker(job 等 outbox) 的 PostgreSQL 死锁。
+            job = session.get(IngestionJobRow, job_id, with_for_update=True)
             outbox = session.scalar(
                 select(OutboxRow).where(OutboxRow.job_id == job_id).with_for_update())
-            job = session.get(IngestionJobRow, job_id)
             if outbox is None or job is None:
                 raise UploadError("not_found", "待投递任务不存在。")
             # 只提交自己预占的 publishing 状态。Worker 可能已经把它推进到 consumed，

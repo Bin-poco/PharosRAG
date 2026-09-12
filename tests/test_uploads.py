@@ -39,6 +39,9 @@ def test_upload_acl_is_server_derived_and_least_privilege():
     public = build_upload_acl(ADMIN, "tenant", [])
     assert public["tenant"] == "t1" and public["visibility"] == "public"
 
+    admin_managed_private = build_upload_acl(ADMIN, "private", [], owner="alice")
+    assert admin_managed_private["allow"] == ["user:alice"]
+
     with pytest.raises(UploadError) as exc:
         build_upload_acl(READER, "private", [])
     assert exc.value.code == "upload_forbidden"
@@ -193,6 +196,115 @@ def test_transient_pipeline_failure_is_scheduled_for_retry(tmp_path):
     assert result["attempts"] == 1
 
 
+def test_upload_manager_reindexes_updates_access_and_soft_deletes(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+    record = manager.create(
+        io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[])
+    manager.repository.update_by_document(
+        record["document_id"], status="ready", stage="ready", chunk_count=2)
+
+    class FakePipeline:
+        deleted = []
+
+        def delete_index(self, document_id):
+            self.deleted.append(document_id)
+
+    pipeline = FakePipeline()
+    manager._pipeline = pipeline
+    reindexed = manager.reindex_document(record["document_id"])
+    assert reindexed["job_id"] != record["job_id"] and reindexed["status"] == "queued"
+    assert (tmp_path / "uploads" / record["document_id"] / "source.md").is_file()
+
+    manager.repository.update_by_document(
+        record["document_id"], status="ready", stage="ready", chunk_count=2)
+    restricted = manager.update_access(
+        record["document_id"], identity=UPLOADER,
+        access_scope="restricted", groups=["g_eng"])
+    assert restricted["access_scope"] == "restricted"
+    assert restricted["groups"] == ["g_eng"] and restricted["status"] == "queued"
+    assert restricted["chunk_count"] == 0
+
+    manager.repository.update_by_document(
+        record["document_id"], status="ready", stage="ready", chunk_count=2)
+    deleted = manager.delete_document(record["document_id"])
+    assert deleted["status"] == "deleted" and deleted["chunk_count"] == 0
+    assert pipeline.deleted == [record["document_id"], record["document_id"]]
+    doc_dir = tmp_path / "uploads" / record["document_id"]
+    assert (doc_dir / "record.json").is_file()  # File 仓储仍保留软删除审计。
+    assert not (doc_dir / "source.md").exists()
+    assert manager.list_documents(tenant="t1") == []
+    assert manager.list_documents(tenant="t1", include_deleted=True)[0]["status"] == "deleted"
+
+
+def test_upload_manager_marks_incomplete_delete_for_safe_retry(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+    record = manager.create(
+        io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[])
+    manager.repository.update_by_document(
+        record["document_id"], status="ready", stage="ready")
+
+    class FailingPipeline:
+        def delete_index(self, document_id):
+            raise ConnectionError("qdrant unavailable")
+
+    manager._pipeline = FailingPipeline()
+    with pytest.raises(ConnectionError):
+        manager.delete_document(record["document_id"])
+
+    failed = manager.get_document(record["document_id"])
+    assert failed["status"] == "delete_failed"
+    assert (tmp_path / "uploads" / record["document_id"] / "source.md").is_file()
+
+
+def test_access_update_rejects_busy_document_before_touching_index(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+    record = manager.create(
+        io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[])
+
+    class FakePipeline:
+        deleted = []
+
+        def delete_index(self, document_id):
+            self.deleted.append(document_id)
+
+    pipeline = FakePipeline()
+    manager._pipeline = pipeline
+    with pytest.raises(UploadError) as exc:
+        manager.update_access(
+            record["document_id"], identity=UPLOADER,
+            access_scope="restricted", groups=["g_eng"])
+    assert exc.value.code == "document_busy"
+    assert pipeline.deleted == []
+
+
+def test_access_update_failure_is_persisted_and_retryable(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+    record = manager.create(
+        io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[])
+    manager.repository.update_by_document(
+        record["document_id"], status="ready", stage="ready")
+
+    class FailingPipeline:
+        def delete_index(self, document_id):
+            raise ConnectionError("qdrant unavailable")
+
+    manager._pipeline = FailingPipeline()
+    with pytest.raises(ConnectionError):
+        manager.update_access(
+            record["document_id"], identity=UPLOADER,
+            access_scope="restricted", groups=["g_eng"])
+
+    failed = manager.get_document(record["document_id"])
+    assert failed["status"] == "access_update_failed"
+    assert failed["job_status"] == "failed"
+    assert failed["error_code"] == "access_update_failed"
+    assert failed["access_scope"] == "private"  # 旧索引删除失败时不提交新权限。
+
+
 class FakeUploadManager:
     def __init__(self):
         self.records = {}
@@ -223,6 +335,44 @@ class FakeUploadManager:
                       stage="uploaded", attempts=0, error_code=None)
         self.records["job_2"] = record
         return {k: v for k, v in record.items() if k != "acl"}
+
+    def get_document(self, document_id):
+        matches = [record for record in self.records.values()
+                   if record["document_id"] == document_id]
+        record = matches[-1] if matches else None
+        return {k: v for k, v in record.items() if k != "acl"} if record else None
+
+    def list_documents(self, *, tenant, owner=None, include_deleted=False, limit=100, offset=0):
+        current = {}
+        for record in self.records.values():
+            current[record["document_id"]] = record
+        records = [record for record in current.values()
+                   if record["tenant"] == tenant
+                   and (owner is None or record["owner"] == owner)
+                   and (include_deleted or record["status"] != "deleted")]
+        return [{k: v for k, v in record.items() if k != "acl"}
+                for record in records[offset:offset + limit]]
+
+    def reindex_document(self, document_id, **changes):
+        current = self.get_document(document_id)
+        if current["status"] in {"queued", "processing"}:
+            raise UploadError("document_busy", "文档正在处理中，请稍后重试。")
+        record = {**current, **{k: v for k, v in changes.items() if v is not None},
+                  "job_id": "job_lifecycle", "status": "queued",
+                  "job_status": "queued", "stage": "uploaded"}
+        self.records[record["job_id"]] = record
+        return dict(record)
+
+    def update_access(self, document_id, *, identity, access_scope, groups):
+        acl = build_upload_acl(identity, access_scope, groups)
+        return self.reindex_document(
+            document_id, access_scope=access_scope, groups=groups, acl=acl)
+
+    def delete_document(self, document_id):
+        current = self.get_document(document_id)
+        current.update(status="deleted", chunk_count=0)
+        self.records[current["job_id"]] = current
+        return current
 
 
 def test_upload_http_requires_role_and_job_is_owner_scoped():
@@ -343,3 +493,77 @@ def test_upload_http_maps_transient_persistence_failure_to_retriable_503():
         "retriable": True,
         "hint": "上传任务暂时无法保存，请稍后重试。",
     }
+
+
+def test_document_management_http_is_owner_scoped_and_dispatches_lifecycle_jobs():
+    uploader = Identity(name="alice", tenant="t1", principals=["g_eng"], roles=["uploader"])
+    same_tenant_other = Identity(
+        name="bob", tenant="t1", principals=["g_eng"], roles=["uploader"])
+    admin = Identity(name="root", tenant="t1", principals=[], admin=True)
+    manager = FakeUploadManager()
+    manager.create(io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+                   identity=uploader, access_scope="private", groups=[])
+    manager.records["job_1"].update(status="ready", job_status="succeeded", stage="ready")
+
+    class FakeDispatcher:
+        jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    dispatcher = FakeDispatcher()
+    app = make_app(
+        cfg=make_cfg(host="0.0.0.0"),
+        keys={"a" * 20: uploader, "b" * 20: same_tenant_other, "r" * 20: admin},
+        task_dispatcher=dispatcher)
+    app.state.upload_manager = manager
+    with TestClient(app) as client:
+        listed = client.get("/v1/uploads", headers={"X-API-Key": "a" * 20})
+        assert listed.status_code == 200 and listed.json()["returned_n"] == 1
+        assert client.get("/v1/uploads", headers={"X-API-Key": "b" * 20}).json()["returned_n"] == 0
+        assert client.get("/v1/uploads", headers={"X-API-Key": "r" * 20}).json()["returned_n"] == 1
+        assert client.post(
+            "/v1/documents/upload__1/reindex",
+            headers={"X-API-Key": "b" * 20}).status_code == 404
+
+        reindexed = client.post(
+            "/v1/documents/upload__1/reindex", headers={"X-API-Key": "a" * 20})
+        assert reindexed.status_code == 202
+        assert reindexed.json()["job_id"] == "job_lifecycle"
+        assert dispatcher.jobs == ["job_lifecycle"]
+
+
+def test_document_management_http_updates_access_and_soft_deletes():
+    uploader = Identity(name="alice", tenant="t1", principals=["g_eng"], roles=["uploader"])
+    manager = FakeUploadManager()
+    manager.create(io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+                   identity=uploader, access_scope="private", groups=[])
+    manager.records["job_1"].update(status="ready", job_status="succeeded", stage="ready")
+
+    class FakeDispatcher:
+        jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader},
+                   task_dispatcher=FakeDispatcher())
+    app.state.upload_manager = manager
+    with TestClient(app) as client:
+        changed = client.patch(
+            "/v1/documents/upload__1/access", headers={"X-API-Key": "a" * 20},
+            json={"access_scope": "restricted", "groups": ["g_eng"]})
+        assert changed.status_code == 202
+        assert changed.json()["access_scope"] == "restricted"
+
+        manager.records["job_lifecycle"].update(
+            status="ready", job_status="succeeded", stage="ready")
+        deleted = client.delete(
+            "/v1/documents/upload__1", headers={"X-API-Key": "a" * 20})
+        assert deleted.status_code == 200
+        assert deleted.json()["document_status"] == "deleted"
+        assert client.get(
+            "/v1/uploads", headers={"X-API-Key": "a" * 20}).json()["returned_n"] == 0
+        assert client.get(
+            "/v1/uploads?include_deleted=true",
+            headers={"X-API-Key": "a" * 20}).json()["documents"][0]["status"] == "deleted"

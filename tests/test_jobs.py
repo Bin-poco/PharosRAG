@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pharos.ingestion import UploadError
-from pharos.jobs.models import IngestionJobRow, OutboxRow, utcnow
+from pharos.jobs.models import DocumentRow, IngestionJobRow, OutboxRow, utcnow
 from pharos.jobs.dispatcher import CeleryJobDispatcher
 from pharos.jobs.repository import SQLJobRepository
 
@@ -222,6 +223,102 @@ def test_manual_retry_creates_new_job_and_preserves_failed_history(tmp_path):
     assert exc.value.code == "job_not_retryable"
 
 
+def test_document_lifecycle_lists_reindexes_and_soft_deletes(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.claim_by_job("job_db1", worker_id="worker-a")
+    repository.update_by_document(
+        "upload__db1", status="ready", stage="ready", chunk_count=4,
+        expected_worker_id="worker-a")
+
+    assert [item["document_id"] for item in repository.list_documents(tenant="t1")] == [
+        "upload__db1"]
+    assert repository.list_documents(tenant="other") == []
+
+    acl = {"tenant": "t1", "allow": ["user:alice", "g_eng"],
+           "visibility": "restricted", "unset": False}
+    queued = repository.enqueue_reindex(
+        "upload__db1", new_job_id="job_db2", max_attempts=4,
+        access_scope="restricted", groups=["g_eng"], acl=acl)
+
+    assert queued["job_id"] == "job_db2" and queued["job_status"] == "queued"
+    assert queued["access_scope"] == "restricted" and queued["groups"] == ["g_eng"]
+    assert repository.get_job("job_db1")["job_status"] == "succeeded"
+    assert repository.list_pending_outbox() == ["job_db2"]
+    with pytest.raises(UploadError) as exc:
+        repository.begin_delete("upload__db1")
+    assert exc.value.code == "document_busy"
+
+    repository.claim_by_job("job_db2", worker_id="worker-b")
+    repository.update_by_document(
+        "upload__db1", status="ready", stage="ready", chunk_count=5,
+        expected_worker_id="worker-b")
+    assert repository.begin_delete("upload__db1")["status"] == "deleting"
+    deleted = repository.finish_delete("upload__db1")
+
+    assert deleted["status"] == "deleted" and deleted["chunk_count"] == 0
+    assert deleted["stage"] == "ready"  # 删除不篡改最后一条摄取任务的审计阶段。
+    assert repository.list_documents(tenant="t1") == []
+    assert repository.list_documents(tenant="t1", include_deleted=True)[0]["status"] == "deleted"
+    with pytest.raises(UploadError) as exc:
+        repository.enqueue_reindex(
+            "upload__db1", new_job_id="job_db3", max_attempts=3)
+    assert exc.value.code == "document_deleted"
+
+
+def test_recovery_releases_interrupted_lifecycle_operations(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.claim_by_job("job_db1", worker_id="worker-a")
+    repository.update_by_document(
+        "upload__db1", status="ready", stage="ready", expected_worker_id="worker-a")
+    repository.prepare_access_update(
+        "upload__db1", new_job_id="job_access", max_attempts=3)
+    with Session(repository.engine) as session, session.begin():
+        session.get(IngestionJobRow, "job_access").updated_at = utcnow() - timedelta(minutes=10)
+
+    assert repository.recover_stale(stale_seconds=120) == {"recovered": 0, "failed": 1}
+    interrupted = repository.get_by_document("upload__db1")
+    assert interrupted["status"] == "access_update_failed"
+    assert interrupted["job_status"] == "failed"
+    assert interrupted["error_code"] == "access_update_interrupted"
+    with pytest.raises(UploadError) as exc:
+        repository.retry_failed(
+            "job_access", new_job_id="job_wrong_acl", max_attempts=3)
+    assert exc.value.code == "job_not_retryable"
+
+    repository.begin_delete("upload__db1")
+    with Session(repository.engine) as session, session.begin():
+        session.get(DocumentRow, "upload__db1").updated_at = utcnow() - timedelta(minutes=10)
+    assert repository.recover_stale(stale_seconds=120) == {"recovered": 0, "failed": 1}
+    assert repository.get_by_document("upload__db1")["status"] == "delete_failed"
+
+
+def test_access_update_is_held_until_old_index_has_been_removed(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.claim_by_job("job_db1", worker_id="worker-a")
+    repository.update_by_document(
+        "upload__db1", status="ready", stage="ready", expected_worker_id="worker-a")
+
+    held = repository.prepare_access_update(
+        "upload__db1", new_job_id="job_access", max_attempts=3)
+    assert held["status"] == "updating_access" and held["job_status"] == "held"
+    assert repository.list_pending_outbox() == []
+    with pytest.raises(UploadError) as exc:
+        repository.begin_delete("upload__db1")
+    assert exc.value.code == "document_busy"
+
+    acl = {"tenant": "t1", "allow": ["user:alice", "g_eng"],
+           "visibility": "restricted", "unset": False}
+    active = repository.activate_access_update(
+        "upload__db1", job_id="job_access", access_scope="restricted",
+        groups=["g_eng"], acl=acl)
+    assert active["status"] == "queued" and active["job_status"] == "queued"
+    assert active["groups"] == ["g_eng"] and active["chunk_count"] == 0
+    assert repository.list_pending_outbox() == ["job_access"]
+
+
 def test_sent_but_unclaimed_outbox_is_reopened_for_dispatch(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
@@ -249,6 +346,46 @@ def test_fast_worker_claim_does_not_let_dispatcher_revert_outbox_state(tmp_path)
         outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
         assert outbox.status == "consumed"
     assert repository.get_job("job_db1")["celery_task_id"] == "celery-fast"
+
+
+def test_mark_sent_locks_job_before_outbox_to_avoid_worker_deadlock(tmp_path, monkeypatch):
+    """Worker 的固定锁序是 job -> outbox；发送回执必须完全一致。"""
+    import pharos.jobs.repository as repository_module
+
+    calls = []
+    job = SimpleNamespace(celery_task_id=None, updated_at=None)
+    outbox = SimpleNamespace(
+        status="publishing", sent_at=None, last_error="old",
+        attempts=0, updated_at=None)
+
+    class FakeSession:
+        def __init__(self, engine):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def begin(self):
+            return self
+
+        def get(self, model, key, **kwargs):
+            calls.append(("job", kwargs.get("with_for_update")))
+            return job
+
+        def scalar(self, statement):
+            calls.append(("outbox", True))
+            return outbox
+
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}")
+    monkeypatch.setattr(repository_module, "Session", FakeSession)
+    repository.mark_outbox_sent("job_db1", "celery-fast")
+
+    assert calls == [("job", True), ("outbox", True)]
+    assert job.celery_task_id == "celery-fast"
+    assert outbox.status == "sent"
 
 
 def test_fast_worker_retry_does_not_let_dispatcher_cancel_backoff(tmp_path):
