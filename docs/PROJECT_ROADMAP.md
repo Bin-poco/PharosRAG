@@ -48,9 +48,9 @@
 
 每一步输出 trace，限制最大工具调用次数，并用评估集证明多跳策略在哪些问题上优于一次性 RAG。仅仅“接了 MCP”不算完成 Agentic RAG。
 
-## 阶段 4：从命令行项目变成产品（第 4 周）
+## 阶段 4：从命令行项目变成产品（已完成后端文档管理，前端待做）
 
-新增 FastAPI 文档管理 API：上传、解析状态、文档列表、删除和重建索引。解析任务超过数秒后再引入 Redis + Celery/Dramatiq：Redis 用作任务队列、短期状态和限流，不承担文档或向量的永久存储。
+已完成 FastAPI 文档管理 API：Markdown/PDF 上传、任务状态、数据库管理列表、失败重试、重建索引、ACL 更新和软删除。耗时解析采用 PostgreSQL + Outbox 保存事实状态，Redis + Celery 负责投递与执行；Redis 不承担文档、任务或向量的永久存储。实现和故障恢复细节见 `docs/RELIABLE_UPLOAD_JOBS.md` 与 `docs/DOCUMENT_LIFECYCLE.md`。
 
 同时补一个轻量前端，至少包含：
 
