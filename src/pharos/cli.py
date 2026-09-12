@@ -64,6 +64,12 @@ def cmd_parse(args) -> None:
     run_parse(manifest, dest, corpus_root)
 
 
+def cmd_import_markdown(args) -> None:
+    from .markdown_ingest import import_manifest
+    count = import_manifest(args.manifest, args.dest, timeout=args.timeout)
+    print(f"\nDONE -> {args.dest}  {count} 篇 Markdown 文档已转换,可执行 pharos index。", flush=True)
+
+
 def cmd_ask(args) -> None:
     with _client(args.url) as c:
         try:
@@ -150,6 +156,12 @@ def main(argv: list[str] | None = None) -> None:
     sp.add_argument("--dest", default=None, help="输出目录(默认 PHAROS_CORPUS_DIR,再默认仓根 parsed/)")
     sp.add_argument("--corpus-root", default=None, dest="corpus_root", help="解析 manifest 相对 corpus_path 的根(默认仓根)")
     sp.set_defaults(fn=cmd_parse)
+
+    sp = sub.add_parser("import-markdown", help="下载官方 Markdown 文档并转换为可建库的标准目录")
+    sp.add_argument("--manifest", required=True, help="JSON 文档源清单")
+    sp.add_argument("--dest", required=True, help="标准化语料输出目录")
+    sp.add_argument("--timeout", type=float, default=30.0, help="单篇下载超时秒数")
+    sp.set_defaults(fn=cmd_import_markdown)
 
     sp = sub.add_parser("ask", help="一次性问答(经守护进程 /v1/ask,闭管道+引用)")
     sp.add_argument("query")

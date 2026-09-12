@@ -67,6 +67,8 @@ One thing worth stating plainly: **the throughput ceiling is the forward speed o
 
 ## Getting started
 
+> Apple Silicon Mac 没有 NVIDIA GPU？使用 [Mac Docker + 在线模型开发指南](docs/MAC_DOCKER_DEV.md)，保留完整 FastAPI/Qdrant/Agentic RAG 链路，只把 CUDA 推理替换为阿里云百炼。准备把它做成自己的简历项目时，按 [五阶段改造路线](docs/PROJECT_ROADMAP.md) 推进。
+
 The service runs under systemd — starts at boot, restarts on failure. Day to day, a team member needs their own API key and then:
 
 The Mac development profile also exposes an authenticated Markdown/PDF upload endpoint (`POST /v1/documents`).

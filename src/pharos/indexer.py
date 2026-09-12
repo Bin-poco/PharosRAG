@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 
 from chunker import Chunker
@@ -16,6 +17,28 @@ from chunker.adapters.mineru import from_mineru_dir
 from embedder import EmbedConfig, Embedder
 
 from . import config
+
+
+_SAFE_DOC_META = {
+    "title", "topic", "repository", "revision", "source_url", "license", "license_url",
+    "content_sha256", "retrieved_at", "source_format", "page_scheme",
+}
+
+
+def load_doc_meta(doc_dir: str, fallback_title: str) -> dict:
+    """Load optional ingest metadata without allowing ACL fields into convenience metadata."""
+    path = os.path.join(doc_dir, "metadata.json")
+    if not os.path.isfile(path):
+        return {"title": fallback_title}
+    try:
+        raw = json.loads(open(path, encoding="utf-8").read())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"无效 metadata.json: {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"metadata.json 顶层必须是对象: {path}")
+    meta = {key: raw[key] for key in _SAFE_DOC_META if raw.get(key) not in (None, "")}
+    meta.setdefault("title", fallback_title)
+    return meta
 
 
 def detect_lang(elements) -> str:
@@ -62,7 +85,14 @@ def run_index(cfg: config.PharosConfig, corpus: str | None = None, dest: str | N
                        sidecar_dir=sidecar_dir,
                        dense_dim=cfg.dense_dim, collection=collection,
                        dense_model_path=cfg.dense_model_path, rerank_model_path=cfg.rerank_model_path,
-                       gpu_name_must_contain=cfg.gpu_name)   # server 模式(qdrant_url非空)写 server;qdrant_path 被 store 三分支忽略
+                       gpu_name_must_contain=cfg.gpu_name,
+                       # 建库与查询必须使用同一向量空间。漏传 remote 开关会让 Mac/无 GPU 环境
+                       # 在 index 阶段静默退回本地 8B 模型，也会造成“云端建库、本地查询”错位。
+                       inference_url=cfg.inference_url,
+                       inference_timeout=cfg.inference_timeout,
+                       inference_connect_timeout=cfg.inference_connect_timeout,
+                       inference_retries=cfg.inference_retries,
+                       inference_backoff=cfg.inference_backoff)   # server 模式写 Qdrant server;remote 模式走云适配器
     try:
         emb = Embedder(ecfg)
     except Exception as e:
@@ -89,8 +119,9 @@ def run_index(cfg: config.PharosConfig, corpus: str | None = None, dest: str | N
                 print(f"  跳过 {d}: 空", flush=True)
                 continue
             lang = detect_lang(els)
+            doc_meta = load_doc_meta(ddir, d)
             res = Chunker().chunk(els, doc_id=d, doc_type=doc_type, lang=lang,
-                                  doc_meta={"title": d}, acl=acl)
+                                  doc_meta=doc_meta, acl=acl)
             emb.index_document(d, els, res, image_root=ddir)
             ok += 1
             total += len(res.chunks)
