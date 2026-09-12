@@ -20,23 +20,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
-from chunker import Chunker
-from chunker.adapters.mineru import from_mineru
 from embedder import Embedder
 
-from .markdown_ingest import markdown_to_content_list
+from .ingestion import IngestionPipeline, UploadError
 from .mineru import MinerUClient, MinerUError
 
 log = logging.getLogger("pharos")
 
 ALLOWED_SUFFIXES = {".md", ".markdown", ".pdf"}
 ACCESS_SCOPES = {"private", "restricted", "tenant"}
-
-
-class UploadError(ValueError):
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
 
 
 def personal_principal(identity) -> str:
@@ -92,7 +84,7 @@ class DocumentUploadManager:
         self.max_bytes = max(1, int(max_bytes))
         self.mineru_client = mineru_client
         self._lock = threading.RLock()
-        self._embedder = None
+        self._pipeline = None
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _doc_dir(self, doc_id: str) -> Path:
@@ -203,14 +195,17 @@ class DocumentUploadManager:
             self._write_record(record)
             return record
 
-    def _get_embedder(self):
+    def _get_pipeline(self):
         with self._lock:
-            if self._embedder is None:
-                # 复用 Retriever 已有的 Store/Dense:嵌入式 Qdrant 不重复开客户端，
-                # local GPU 不重复加载模型，remote 也共用连接池与语义配置。
-                self._embedder = Embedder(self.retriever.cfg, store=self.retriever.store,
-                                          dense=self.retriever.dense)
-            return self._embedder
+            if self._pipeline is None:
+                self._pipeline = IngestionPipeline(
+                    self.root,
+                    self.retriever,
+                    mineru_client=self.mineru_client,
+                    # 保留 uploads.Embedder 这个替换点，兼容既有测试和调用方。
+                    embedder_factory=lambda *args, **kwargs: Embedder(*args, **kwargs),
+                )
+            return self._pipeline
 
     def _claim(self, document_id: str) -> dict | None:
         """原子领取 queued 任务；重复调度不会并发重复建库。"""
@@ -230,52 +225,11 @@ class DocumentUploadManager:
             record = self._claim(document_id)
             if record is None:
                 return
-            source = Path(record["source_path"])
-            title = Path(record["filename"]).stem
-            parsed_dir = self._doc_dir(document_id) / "parsed"
-            parsed_dir.mkdir(parents=True, exist_ok=True)
-            layout = None
-            if record.get("source_format") == "pdf":
-                if self.mineru_client is None:
-                    raise MinerUError("mineru_unconfigured", "PDF 上传尚未配置 MinerU 客户端。")
-                self._update(document_id, stage="mineru_parsing")
-                parsed = self.mineru_client.parse_pdf(source, parsed_dir, data_id=document_id)
-                content = json.loads(parsed.content_list_path.read_text(encoding="utf-8"))
-                if parsed.layout_path:
-                    layout = json.loads(parsed.layout_path.read_text(encoding="utf-8"))
-                image_root = parsed.content_root
-                parser_batch_id = parsed.batch_id
-            else:
-                try:
-                    markdown = source.read_text(encoding="utf-8")
-                except UnicodeDecodeError as exc:
-                    raise UploadError("invalid_encoding", "Markdown 必须是 UTF-8 编码。") from exc
-                content = markdown_to_content_list(markdown, title=title, source_url="")
-                (parsed_dir / f"{document_id}_content_list.json").write_text(
-                    json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                image_root = parsed_dir
-                parser_batch_id = None
-            metadata = {
-                "doc_id": document_id,
-                "title": title,
-                "source_format": record["source_format"],
-                "content_sha256": record["sha256"],
-                "original_filename": record["filename"],
-            }
-            (parsed_dir / "metadata.json").write_text(
-                json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-            self._update(document_id, stage="chunking", parser_batch_id=parser_batch_id)
-            elements = from_mineru(content, layout)
-            sample = "".join((element.text or "") for element in elements[:40])[:2000]
-            result = Chunker().chunk(elements, doc_id=document_id, doc_type="technical_document",
-                                     lang="ch" if any("\u4e00" <= c <= "\u9fff" for c in sample) else "en",
-                                     doc_meta=metadata, acl=record["acl"])
-            self._update(document_id, stage="embedding")
-            stats = self._get_embedder().index_document(
-                document_id, elements, result, image_root=str(image_root))
+            stats = self._get_pipeline().run(
+                record, lambda **changes: self._update(document_id, **changes))
             self._update(document_id, status="ready", stage="ready",
-                         chunk_count=int(stats.get("indexed", len(result.chunks))))
+                         chunk_count=stats["chunk_count"],
+                         parser_batch_id=stats.get("parser_batch_id"))
         except Exception as exc:
             code = exc.code if isinstance(exc, (UploadError, MinerUError)) else "index_failed"
             log.exception("upload processing failed: doc=%s code=%s", document_id, code)
