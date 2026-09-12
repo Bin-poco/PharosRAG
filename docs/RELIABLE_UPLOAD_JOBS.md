@@ -17,17 +17,19 @@ PostgreSQL: documents + ingestion_jobs + job_outbox
                        |
                     Redis
                        |
-                 Celery Worker
-                       |
-     MinerU -> Chunker -> Embedding -> Qdrant + sidecar
+          +------------+-------------+
+          |                          |
+  Ingestion Worker             Control Worker
+          |                    补投 + 失联恢复
+ MinerU -> Chunker -> Embedding -> Qdrant + sidecar
 ```
 
 - PostgreSQL 是文档和任务状态的唯一真相来源；Redis 丢消息不会丢任务。
 - Outbox 与任务在同一事务创建，避免“数据库已有任务，但消息没有发出去”的双写裂缝。
 - 消息只带 `job_id`；Worker 按这个 `job_id` 原子领取任务，再从数据库读取可信的文件路径、tenant、owner 和 ACL。迟到的旧消息不能领取人工重试创建的新任务。
 - `worker_id=hostname:celery_task_id` 是一次领取的租约标识。旧 Worker 丢失租约后不能写阶段或完成状态。
-- Heartbeat 每 15 秒续租；scheduler 每 30 秒检查超过 120 秒无心跳的 `running` 任务。
-- Outbox 使用 `pending -> sent -> consumed` 表示待发布、已进入 Redis、已被 Worker 领取；长期停在 `sent` 且任务仍未领取时会重新开放补投。
+- Heartbeat 每 15 秒续租；scheduler 每 30 秒把维护任务送入独立的 `pharos.control` 队列，由 control-worker 检查超过 120 秒无心跳的 `running` 任务。
+- Outbox 使用 `pending -> publishing -> sent -> consumed` 表示待发布、投递者已预占、已进入 Redis、已被 Worker 领取。状态更新使用条件转换，迟到的发送回执不能覆盖 Worker 已设置的重试；长期停在 `publishing/sent` 且任务仍未领取时会重新开放补投。
 
 ## 状态机
 
@@ -60,7 +62,7 @@ failed --(人工 retry，创建新 job)--> queued
 ## 故障恢复为什么有效
 
 1. Redis 在 API 投递时不可用：Outbox 保持 `pending`，scheduler 后续补投。
-2. 同一消息被重复投递：数据库行锁只允许一个 Worker 从 `queued/retrying` 转为 `running`。
+2. 多个 dispatcher 同时扫描：`publishing` 预占只允许一个发送者发布；即使消息仍被重复投递，数据库行锁也只允许一个 Worker 从 `queued/retrying` 转为 `running`。
 3. Worker 执行中崩溃：心跳停止，stale recovery 将任务重新入队；超过次数则失败。
 4. 被判失联的旧 Worker 又恢复：它的 `worker_id` 已失效，租约校验拒绝它覆盖新 Worker 状态。
 5. MinerU/在线推理暂时超时：任务进入 `waiting_retry`，到期后 Outbox 再次投递。
@@ -85,12 +87,12 @@ PHAROS_JOB_SOFT_TIME_LIMIT=2100
 PHAROS_JOB_TIME_LIMIT=2400
 ```
 
-Mac 开发环境已经在 `compose.mac.yml` 中提供 PostgreSQL、Redis、migrate、worker 和 scheduler。
+Mac 开发环境已经在 `compose.mac.yml` 中提供 PostgreSQL、Redis、migrate、摄取 worker、独立 control-worker 和 scheduler。
 常用观察命令：
 
 ```bash
 docker compose --env-file .env.mac -f compose.mac.yml ps
-docker compose --env-file .env.mac -f compose.mac.yml logs -f pharos worker scheduler
+docker compose --env-file .env.mac -f compose.mac.yml logs -f pharos worker control-worker scheduler
 ```
 
 任务查询与人工重试：

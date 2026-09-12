@@ -199,7 +199,7 @@ services:
       PHAROS_DENSE_MODEL_PATH: /models/qwen3-vl-embedding
       PHAROS_RERANK_MODEL_PATH: /models/qwen3-vl-rerank
       PHAROS_GPU_NAME: ""
-    command: ["celery", "-A", "pharos.worker.celery_app:app", "worker", "--loglevel=INFO", "--concurrency=1"]
+    command: ["celery", "-A", "pharos.worker.celery_app:app", "worker", "--loglevel=INFO", "--concurrency=1", "--queues=pharos.ingestion"]
     volumes:
       - type: bind
         source: ./src
@@ -216,6 +216,30 @@ services:
         condition: service_healthy
       cloud-inference:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [pharos-net]
+
+  control-worker:
+    image: pharos-app:mac-dev
+    container_name: pharos-mac-control-worker
+    restart: unless-stopped
+    env_file: [.env.mac]
+    environment:
+      PYTHONPATH: /app/src
+      PHAROS_DATABASE_URL: "postgresql+psycopg://pharos:${PHAROS_POSTGRES_PASSWORD:-pharos-dev-only}@postgres:5432/pharos"
+      PHAROS_REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "pharos.worker.celery_app:app", "worker", "--loglevel=INFO", "--concurrency=1", "--queues=pharos.control"]
+    volumes:
+      - type: bind
+        source: ./src
+        target: /app/src
+        read_only: true
+    depends_on:
       postgres:
         condition: service_healthy
       redis:

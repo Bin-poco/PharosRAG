@@ -28,6 +28,8 @@ log = logging.getLogger("pharos")
 
 ALLOWED_SUFFIXES = {".md", ".markdown", ".pdf"}
 ACCESS_SCOPES = {"private", "restricted", "tenant"}
+MAX_FILENAME_CHARS = 512
+MAX_CONTENT_TYPE_CHARS = 160
 
 
 def personal_principal(identity) -> str:
@@ -113,6 +115,14 @@ class DocumentUploadManager:
         suffix = Path(safe_name).suffix.lower()
         if not safe_name or suffix not in ALLOWED_SUFFIXES:
             raise UploadError("unsupported_type", "当前支持 .md、.markdown 和 .pdf 文档。")
+        if len(safe_name) > MAX_FILENAME_CHARS:
+            raise UploadError("filename_too_long", f"文件名不能超过 {MAX_FILENAME_CHARS} 个字符。")
+        normalized_content_type = content_type or "application/octet-stream"
+        if len(normalized_content_type) > MAX_CONTENT_TYPE_CHARS:
+            raise UploadError(
+                "content_type_too_long",
+                f"Content-Type 不能超过 {MAX_CONTENT_TYPE_CHARS} 个字符。",
+            )
 
         document_id = f"upload__{uuid.uuid4().hex}"
         job_id = f"job_{uuid.uuid4().hex}"
@@ -154,7 +164,7 @@ class DocumentUploadManager:
             "tenant": identity.tenant,
             "owner": identity.name,
             "filename": safe_name,
-            "content_type": content_type or "application/octet-stream",
+            "content_type": normalized_content_type,
             "source_format": "pdf" if suffix == ".pdf" else "markdown",
             "size": size,
             "sha256": digest.hexdigest(),

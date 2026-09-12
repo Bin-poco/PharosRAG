@@ -14,7 +14,9 @@ class CeleryJobDispatcher:
         self.repository = repository
         self.celery_app = celery_app
 
-    def dispatch(self, job_id: str) -> str:
+    def dispatch(self, job_id: str) -> str | None:
+        if not self.repository.begin_outbox_publish(job_id):
+            return None
         task_id = f"ingest_{uuid.uuid4().hex}"
         try:
             self.celery_app.send_task(INGEST_TASK, args=[job_id], task_id=task_id)
@@ -28,8 +30,8 @@ class CeleryJobDispatcher:
         sent = failed = 0
         for job_id in self.repository.list_pending_outbox(limit=limit):
             try:
-                self.dispatch(job_id)
-                sent += 1
+                if self.dispatch(job_id) is not None:
+                    sent += 1
             except Exception:
                 failed += 1
                 log.warning("outbox publish failed: job=%s", job_id, exc_info=True)

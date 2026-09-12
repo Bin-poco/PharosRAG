@@ -12,19 +12,22 @@ Pharos FastAPI :8787  -----> DeepSeek（生成答案）
      |          +---------> PostgreSQL（文档与任务状态）
      |          +---------> Redis（Celery 消息）
      |                            |
-     |                      Celery Worker
-     |                            |
-     +----------------------------+-----> Qdrant :6333（向量检索）
+     |                 +----------+----------+
+     |                 |                     |
+     |          Ingestion Worker       Control Worker
+     |          （解析与建库）          （补投与恢复）
+     |                 |                     |
+     +-----------------+---------------------+-----> Qdrant :6333（向量检索）
                                   |
                          cloud-inference :8900
                                   |
                          阿里云百炼（Embedding + Rerank）
 ```
 
-`pharos` 负责 API、检索、引用、权限和问答；`worker` 负责耗时的文档摄取；`scheduler` 补投
-Outbox 并恢复失联任务；PostgreSQL 是任务状态的唯一真相来源，Redis 只传递消息。`qdrant` 保存
+`pharos` 负责 API、检索、引用、权限和问答；`worker` 负责耗时的文档摄取；`scheduler` 定时发送
+维护任务，`control-worker` 独立执行 Outbox 补投和失联恢复，避免被长时间 PDF 解析阻塞；PostgreSQL 是任务状态的唯一真相来源，Redis 只传递消息。`qdrant` 保存
 向量，`cloud-inference` 把内部推理协议翻译成百炼 API。宿主机源码挂载进容器，API 服务可自动
-重载；Worker 代码修改后执行 `docker compose ... restart worker scheduler`。
+重载；Worker 代码修改后执行 `docker compose ... restart worker control-worker scheduler`。
 
 ## 2. 首次配置
 
@@ -63,7 +66,7 @@ curl http://127.0.0.1:8787/healthz
 查看日志：
 
 ```bash
-docker compose --env-file .env.mac -f compose.mac.yml logs -f cloud-inference pharos worker scheduler
+docker compose --env-file .env.mac -f compose.mac.yml logs -f cloud-inference pharos worker control-worker scheduler
 ```
 
 停止但保留向量数据：
@@ -184,7 +187,7 @@ curl -s http://127.0.0.1:8787/v1/ask \
 
 ## 6. 日常开发节奏
 
-1. 修改 API/检索代码：Pharos 容器自动重载；修改任务代码后重启 `worker scheduler`；
+1. 修改 API/检索代码：Pharos 容器自动重载；修改任务代码后重启 `worker control-worker scheduler`；
 2. 修改 `src/cloud_inference/`：在线推理适配器自动重载；
 3. 改 Python 依赖或 Dockerfile：重新执行 `up -d --build`；
 4. 改 `.env.mac`：执行 `up -d --force-recreate` 让容器重新读取；

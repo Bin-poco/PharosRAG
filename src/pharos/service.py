@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from . import __version__, config, engine, identity as identity_mod, smart, toolcore
 from .obs import RequestLog, Stats
 from .sessions import SessionRegistry
-from .ingestion import build_mineru_client
+from .ingestion import build_mineru_client, is_transient_ingestion_error
 from .jobs import CeleryJobDispatcher, SQLJobRepository
 from .uploads import DocumentUploadManager, UploadError, personal_principal
 from embedder import User
@@ -345,6 +345,15 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                     503 if exc.code == "mineru_unconfigured" else 400)
             return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
                                 status_code=status_code)
+        except Exception as exc:
+            if not is_transient_ingestion_error(exc):
+                raise
+            log.warning("upload persistence temporarily unavailable", exc_info=True)
+            return JSONResponse(
+                {"status": "backend_unavailable", "retriable": True,
+                 "hint": "上传任务暂时无法保存，请稍后重试。"},
+                status_code=503,
+            )
         dispatcher = _get_task_dispatcher()
         dispatch_delayed = False
         if dispatcher is not None:

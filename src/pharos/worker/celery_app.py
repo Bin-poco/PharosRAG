@@ -12,6 +12,11 @@ def build_celery_app(cfg=None) -> Celery:
     app.conf.update(
         imports=("pharos.worker.tasks",),
         task_default_queue="pharos.ingestion",
+        task_routes={
+            "pharos.ingest_document": {"queue": "pharos.ingestion"},
+            "pharos.dispatch_pending": {"queue": "pharos.control"},
+            "pharos.recover_stale_jobs": {"queue": "pharos.control"},
+        },
         task_serializer="json",
         accept_content=["json"],
         result_backend=None,
@@ -31,11 +36,13 @@ def build_celery_app(cfg=None) -> Celery:
                 "task": "pharos.dispatch_pending",
                 "schedule": 30.0,
                 "args": (100,),
+                "options": {"queue": "pharos.control"},
             },
             "recover-stale-ingestion-jobs": {
                 "task": "pharos.recover_stale_jobs",
                 "schedule": 30.0,
                 "args": (100,),
+                "options": {"queue": "pharos.control"},
             },
         },
     )

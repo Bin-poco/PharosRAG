@@ -7,7 +7,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -367,6 +367,22 @@ class SQLJobRepository:
                          .limit(max(1, min(int(limit), 1000))))
             return list(session.scalars(statement))
 
+    def begin_outbox_publish(self, job_id: str) -> bool:
+        """原子预占一条待投递消息，避免多个 dispatcher 重复发布。"""
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            outbox = session.scalar(
+                select(OutboxRow).where(OutboxRow.job_id == job_id).with_for_update())
+            job = session.get(IngestionJobRow, job_id)
+            if (outbox is None or job is None or outbox.status != "pending" or
+                    _aware(outbox.next_attempt_at) > now or
+                    job.status not in {"queued", "retrying"} or
+                    _aware(job.available_at) > now):
+                return False
+            outbox.status = "publishing"
+            outbox.updated_at = now
+            return True
+
     def heartbeat(self, job_id: str, worker_id: str) -> bool:
         now = utcnow()
         with Session(self.engine) as session, session.begin():
@@ -424,7 +440,7 @@ class SQLJobRepository:
             return self._record(document, job)
 
     def recover_unclaimed(self, stale_seconds: int, limit: int = 100) -> dict:
-        """重新开放已发布但长期未被 Worker 领取的 Outbox 消息。
+        """重新开放发布中断或已发布但长期未被 Worker 领取的消息。
 
         Redis 中仍然排队的原消息可能稍后到达，因此这里只恢复成 pending；真正执行仍由
         ``claim_by_job`` 的数据库行锁和 current-job 校验保证幂等。
@@ -437,13 +453,17 @@ class SQLJobRepository:
                 select(OutboxRow, IngestionJobRow)
                 .join(IngestionJobRow, IngestionJobRow.job_id == OutboxRow.job_id)
                 .where(
-                    OutboxRow.status == "sent",
-                    OutboxRow.sent_at.is_not(None),
-                    OutboxRow.sent_at < cutoff,
+                    or_(
+                        (OutboxRow.status == "sent") &
+                        OutboxRow.sent_at.is_not(None) &
+                        (OutboxRow.sent_at < cutoff),
+                        (OutboxRow.status == "publishing") &
+                        (OutboxRow.updated_at < cutoff),
+                    ),
                     IngestionJobRow.status.in_({"queued", "retrying"}),
                     IngestionJobRow.available_at <= now,
                 )
-                .order_by(OutboxRow.sent_at)
+                .order_by(OutboxRow.updated_at)
                 .limit(max(1, min(int(limit), 1000)))
                 .with_for_update(skip_locked=True)))
             for outbox, job in rows:
@@ -537,14 +557,14 @@ class SQLJobRepository:
             job = session.get(IngestionJobRow, job_id)
             if outbox is None or job is None:
                 raise UploadError("not_found", "待投递任务不存在。")
-            # send_task 返回到这里之前，极快的 Worker 可能已经领取任务并将其标成 consumed。
-            # 此时不能把状态倒退回 sent，否则后续对账会制造无意义的重复消息。
-            if outbox.status != "consumed":
+            # 只提交自己预占的 publishing 状态。Worker 可能已经把它推进到 consumed，
+            # 甚至领取后失败并改回 pending 等待重试；任何一种都不能被迟到回写覆盖。
+            if outbox.status == "publishing":
                 outbox.status = "sent"
-            outbox.sent_at = now
-            outbox.last_error = None
-            outbox.attempts += 1
-            outbox.updated_at = now
+                outbox.sent_at = now
+                outbox.last_error = None
+                outbox.attempts += 1
+                outbox.updated_at = now
             job.celery_task_id = celery_task_id
             job.updated_at = now
 
@@ -553,7 +573,7 @@ class SQLJobRepository:
         with Session(self.engine) as session, session.begin():
             outbox = session.scalar(
                 select(OutboxRow).where(OutboxRow.job_id == job_id).with_for_update())
-            if outbox is None:
+            if outbox is None or outbox.status != "publishing":
                 return
             outbox.status = "pending"
             outbox.attempts += 1

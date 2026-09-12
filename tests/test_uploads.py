@@ -95,6 +95,24 @@ def test_upload_manager_rejects_unsupported_empty_and_oversize(tmp_path):
     assert exc.value.code == "invalid_pdf"
 
 
+def test_upload_manager_rejects_metadata_that_exceeds_database_limits(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+
+    with pytest.raises(UploadError) as exc:
+        manager.create(
+            io.BytesIO(b"# Guide"), filename=f"{'a' * 510}.md", content_type="text/markdown",
+            identity=UPLOADER, access_scope="private", groups=[])
+    assert exc.value.code == "filename_too_long"
+
+    with pytest.raises(UploadError) as exc:
+        manager.create(
+            io.BytesIO(b"# Guide"), filename="guide.md", content_type="x" * 161,
+            identity=UPLOADER, access_scope="private", groups=[])
+    assert exc.value.code == "content_type_too_long"
+
+    assert not list((tmp_path / "uploads").glob("upload__*"))
+
+
 def test_upload_manager_parses_pdf_with_mineru_then_indexes(tmp_path, monkeypatch):
     import pharos.uploads as U
 
@@ -303,3 +321,25 @@ def test_upload_http_pdf_reports_missing_mineru_before_accepting(tmp_path, monke
             files={"file": ("manual.pdf", b"%PDF-1.7\nfixture", "application/pdf")})
     assert response.status_code == 503
     assert response.json()["status"] == "mineru_unconfigured"
+
+
+def test_upload_http_maps_transient_persistence_failure_to_retriable_503():
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+
+    class UnavailableUploadManager(FakeUploadManager):
+        def create(self, stream, *, filename, content_type, identity, access_scope, groups):
+            raise ConnectionError("database temporarily unavailable")
+
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader})
+    app.state.upload_manager = UnavailableUploadManager()
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/documents", headers={"X-API-Key": "a" * 20},
+            files={"file": ("guide.md", b"# Guide", "text/markdown")})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "backend_unavailable",
+        "retriable": True,
+        "hint": "上传任务暂时无法保存，请稍后重试。",
+    }

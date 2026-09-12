@@ -99,6 +99,25 @@ def test_dispatcher_publishes_only_job_id_and_marks_outbox_sent(tmp_path):
     assert repository.list_pending_outbox() == []
 
 
+def test_dispatcher_publish_failure_releases_reservation_with_backoff(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+
+    class UnavailableCelery:
+        def send_task(self, name, *, args, task_id):
+            raise ConnectionError("broker unavailable")
+
+    with pytest.raises(ConnectionError):
+        CeleryJobDispatcher(repository, UnavailableCelery()).dispatch("job_db1")
+
+    with Session(repository.engine) as session:
+        outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
+        assert outbox.status == "pending"
+        assert outbox.attempts == 1
+        assert outbox.last_error == "broker_unavailable"
+    assert repository.list_pending_outbox() == []
+
+
 def test_retry_waits_until_available_and_next_worker_can_claim(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
@@ -141,6 +160,7 @@ def test_worker_lease_prevents_stale_worker_from_overwriting_state(tmp_path):
 def test_stale_running_job_is_recovered_through_outbox(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
+    assert repository.begin_outbox_publish("job_db1") is True
     repository.mark_outbox_sent("job_db1", "celery-1")
     repository.claim_by_job("job_db1", worker_id="dead-worker")
     with Session(repository.engine) as session, session.begin():
@@ -205,6 +225,7 @@ def test_manual_retry_creates_new_job_and_preserves_failed_history(tmp_path):
 def test_sent_but_unclaimed_outbox_is_reopened_for_dispatch(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
+    assert repository.begin_outbox_publish("job_db1") is True
     repository.mark_outbox_sent("job_db1", "celery-lost")
     with Session(repository.engine) as session, session.begin():
         outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
@@ -220,6 +241,7 @@ def test_fast_worker_claim_does_not_let_dispatcher_revert_outbox_state(tmp_path)
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
 
+    assert repository.begin_outbox_publish("job_db1") is True
     repository.claim_by_job("job_db1", worker_id="fast-worker")
     repository.mark_outbox_sent("job_db1", "celery-fast")
 
@@ -227,3 +249,45 @@ def test_fast_worker_claim_does_not_let_dispatcher_revert_outbox_state(tmp_path)
         outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
         assert outbox.status == "consumed"
     assert repository.get_job("job_db1")["celery_task_id"] == "celery-fast"
+
+
+def test_fast_worker_retry_does_not_let_dispatcher_cancel_backoff(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+
+    assert repository.begin_outbox_publish("job_db1") is True
+    repository.claim_by_job("job_db1", worker_id="fast-worker")
+    repository.schedule_retry(
+        "upload__db1", error_code="mineru_timeout", delay_seconds=60,
+        expected_worker_id="fast-worker")
+    repository.mark_outbox_sent("job_db1", "celery-fast-retry")
+
+    with Session(repository.engine) as session:
+        outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
+        assert outbox.status == "pending"
+        assert outbox.sent_at is None
+        assert outbox.next_attempt_at is not None
+    record = repository.get_job("job_db1")
+    assert record["job_status"] == "retrying"
+    assert record["celery_task_id"] == "celery-fast-retry"
+    assert repository.list_pending_outbox() == []
+
+
+def test_outbox_publish_reservation_prevents_duplicate_dispatch(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+
+    assert repository.begin_outbox_publish("job_db1") is True
+    assert repository.begin_outbox_publish("job_db1") is False
+
+
+def test_stale_outbox_publish_reservation_is_recovered(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    assert repository.begin_outbox_publish("job_db1") is True
+    with Session(repository.engine) as session, session.begin():
+        outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
+        outbox.updated_at = utcnow() - timedelta(hours=2)
+
+    assert repository.recover_unclaimed(stale_seconds=3600) == {"unclaimed_recovered": 1}
+    assert repository.list_pending_outbox() == ["job_db1"]
