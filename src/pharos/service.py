@@ -58,6 +58,8 @@ class RetrieveReq(BaseModel):
 
 class AskReq(BaseModel):
     query: str = ""
+    # direct 保持既有低延迟闭管道；agent 强制有限步编排；auto 先便宜检索再按复杂度/拒答升级。
+    mode: str = "direct"
     top_k: int | None = None
     rerank: bool = False
     include_contexts: bool = False   # true 时 citations 带被引段原文(大;默认只回溯源元数据)
@@ -88,7 +90,7 @@ class AccessUpdateReq(BaseModel):
 
 def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None,
                generator_factory=None, keys=None, upload_manager=None,
-               task_dispatcher=None) -> FastAPI:
+               task_dispatcher=None, agent_factory=None) -> FastAPI:
     """app 工厂。生产:全默认(从 env 建配置,启动时打开真索引)。测试:注入 fake retriever/user/generator/keys。"""
     cfg = cfg or config.from_env()
     if cfg.redis_url and not cfg.database_url:
@@ -132,6 +134,7 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
     state.user = user
     state.gen_local = threading.local()    # 评审修:Generator/LLM per-thread —— 共享单例的
     state.generator_factory = generator_factory or engine.build_generator   # last_finish_reason 并发下会跨请求串味
+    state.agent_factory = agent_factory or engine.build_agentic_runner
     state.sessions = SessionRegistry()
     state.stats = Stats()                  # D11:进程内指标 + JSONL 请求日志
     state.reqlog = RequestLog(cfg.log_dir, log_queries=cfg.log_queries)
@@ -554,8 +557,87 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
             state.gen_local.gen = gen
         return gen
 
+    def _get_agent_runner():
+        """Agent 与 Generator 同为 per-thread；共享同一 LLM 实例但请求间不共享 AgentState。"""
+        gen = _get_generator()
+        runner = getattr(state.gen_local, "agent_runner", None)
+        if runner is None or getattr(runner, "generator", None) is not gen:
+            runner = state.agent_factory(gen, cfg)
+            state.gen_local.agent_runner = runner
+        return runner
+
+    def _answer_citations(ans, include_contexts: bool) -> list[dict]:
+        citations = []
+        for c in ans.citations:
+            d = {"marker": c.marker, "chunk_id": c.chunk_id, "doc_id": c.doc_id,
+                 "title": c.title, "section": c.section, "page": c.page}
+            if include_contexts:
+                d["text"] = c.text
+            citations.append(d)
+        return citations
+
+    def _agentic_ask(q: AskReq, request: Request, *, forced_mode: str | None = None):
+        req_user = _current_user(request)
+        requested_mode = forced_mode or q.mode
+        if not req_user or not req_user.tenant:
+            return _log(request, {"status": "no_identity", "retriable": False, "hint": no_id_hint})
+        if not (q.query or "").strip():
+            return _log(request, {"status": "empty_query", "retriable": False,
+                                  "hint": "query 为空,请提供具体问题。"})
+        if requested_mode not in ("agent", "auto"):
+            return _log(request, {"status": "bad_arg", "retriable": False,
+                                  "hint": f"Agent 模式必须 agent|auto(收到 {requested_mode})。"})
+        if q.strategy is not None and q.strategy not in ("hybrid", "dense", "sparse"):
+            return _log(request, {"status": "bad_arg", "retriable": False,
+                                  "hint": f"strategy 必须 hybrid|dense|sparse(收到 {q.strategy})。"})
+        try:
+            runner = _get_agent_runner()
+        except ValueError:
+            return _log(request, {"status": "llm_unconfigured", "retriable": False,
+                                  "hint": f"缺 LLM API key(环境变量 {cfg.llm_api_key_env},放 .env)。"})
+        except Exception:
+            log.exception("Agentic Runner 构建失败")
+            return _log(request, {"status": "agent_failed", "retriable": False,
+                                  "hint": "Agent 初始化失败(依赖或引擎配置问题),详见服务端日志。"})
+        try:
+            run = runner.run(
+                q.query, req_user, mode=requested_mode, top_k=q.top_k,
+                rerank=q.rerank, doc_ids=q.doc_ids, doc_type=q.doc_type,
+                kind=q.kind, strategy=q.strategy)
+        except Exception:
+            log.exception("agent ask 失败")
+            return _log(request, {"status": "agent_failed", "retriable": True,
+                                  "hint": "Agent 执行失败(检索后端或 LLM 上游异常),请稍后重试。"},
+                        query=q.query, requested_mode=requested_mode)
+
+        citations = _answer_citations(run.answer, q.include_contexts)
+        numeric = cfg.smart_ask and looks_numeric(q.query)
+        hints = (smart.build_hints(q.query, auto=[], req_kind=q.kind, req_rerank=q.rerank,
+                                   numeric=numeric)
+                 if cfg.smart_ask and smart.is_refusal(run.answer.text) else [])
+        out = {
+            "status": "ok", "answer": run.answer.text, "citations": citations,
+            "n_contexts": run.answer.n_contexts, "model": cfg.llm_model,
+            "finish_reason": run.answer.finish_reason,
+            "route": {"requested_mode": run.requested_mode,
+                      "selected_mode": run.selected_mode,
+                      "reasons": run.route_reasons},
+            "trace": run.trace, "budget": run.budget_dict(),
+            "degraded": run.degraded, "hints": hints,
+        }
+        return _log(request, out, query=q.query, requested_mode=run.requested_mode,
+                    selected_mode=run.selected_mode, steps=len(run.trace),
+                    retrievals=run.retrievals, llm_calls=run.llm_calls,
+                    degraded=run.degraded or None, n_citations=len(citations),
+                    refusal=bool(hints))
+
     @app.post("/v1/ask")
     def ask(q: AskReq, request: Request):
+        if q.mode not in ("direct", "agent", "auto"):
+            return _log(request, {"status": "bad_arg", "retriable": False,
+                                  "hint": f"mode 必须 direct|agent|auto(收到 {q.mode})。"})
+        if q.mode != "direct":
+            return _agentic_ask(q, request)
         req_user = _current_user(request)
         if not req_user or not req_user.tenant:
             return _log(request, {"status": "no_identity", "retriable": False, "hint": no_id_hint})
@@ -600,13 +682,7 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
             log.exception("ask 失败")   # 细节只进服务端日志,不外泄给客户端
             return _log(request, {"status": "ask_failed", "retriable": True,
                                   "hint": "生成失败(检索后端或 LLM 上游异常),请稍后重试。"}, query=q.query)
-        citations = []
-        for c in ans.citations:
-            d = {"marker": c.marker, "chunk_id": c.chunk_id, "doc_id": c.doc_id,
-                 "title": c.title, "section": c.section, "page": c.page}
-            if q.include_contexts:
-                d["text"] = c.text
-            citations.append(d)
+        citations = _answer_citations(ans, q.include_contexts)
         # smart-ask 第 1 层:拒答/部分拒答时给可操作 hints(正常答案不打扰)
         hints = (smart.build_hints(q.query, auto=auto, req_kind=q.kind, req_rerank=q.rerank,
                                    numeric=numeric)
@@ -618,5 +694,10 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                               "finish_reason": ans.finish_reason,
                               "auto": auto, "hints": hints},
                     query=q.query, auto=auto or None, n_citations=len(citations), refusal=bool(hints))
+
+    @app.post("/v1/agent/ask")
+    def agent_ask(q: AskReq, request: Request):
+        """显式 Agentic 出口；忽略请求中的 mode，始终走有限步 Agent 状态机。"""
+        return _agentic_ask(q, request, forced_mode="agent")
 
     return app

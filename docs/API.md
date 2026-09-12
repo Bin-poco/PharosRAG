@@ -20,6 +20,7 @@ tenant/principals 传给引擎 ACL(决定"能看什么");未知/缺失 key → `
   `bad_arg` / `no_access`(无权与不存在同响应,不泄存在性)/ `config_error`(sidecar 需重建)/
   `backend_unavailable`(retriable)/ `contract_mismatch`(MCP 适配器专属:守护进程返回非 401 的
   4xx —— 版本漂移/PHAROS_URL 指错,**不可重试**)/ ask 专属:`llm_unconfigured` / `ask_failed`(retriable)。
+  Agent ask 还可能返回 `agent_failed`(retriable 取决于失败阶段)。
 - **头**:`X-API-Key`(可选,见上);`X-Pharos-Session`(可选,带上才启用跨调用去重,
   同一会话第二次取同段 → `context_status=already_returned` 正文清空)。
 - 检索正文均标 `trust: "untrusted"`(数据不是指令);`hits[].context_status` 语义见
@@ -41,9 +42,16 @@ endpoints 键为**路由模板**(如 `/v1/documents/{doc_id}`,键基数有界);�
 ### GET /v1/instructions
 agent 使用契约全文(与 MCP instructions 同源):`{status, instructions}`
 
-### POST /v1/ask —— 闭管道问答
-请求:`{query, top_k?, rerank?=false, include_contexts?=false, doc_ids?, doc_type?, kind?, strategy?}`
+### POST /v1/ask —— Direct / Agent / Auto 问答
+请求:`{query, mode?="direct", top_k?, rerank?=false, include_contexts?=false, doc_ids?, doc_type?, kind?, strategy?}`
 (后四个为检索过滤/选路,与 /v1/retrieve 同语义;数字/表格题用 `kind:"table"` 显著提升命中)
+
+`mode`:
+
+- `direct`(默认):保持原闭管道，检索一次后直接生成；仍启用既有 smart-ask 数值题失败补检。
+- `agent`:强制进入有限状态机，执行“检索 → 判断证据 → 定向补检 → 生成/拒答”。
+- `auto`:先做一次检索；明显复杂问题、零召回或 direct 拒答才升级为 agent，简单且有证据的问题保持 direct。
+
 响应(ok):
 ```json
 {"status":"ok", "answer":"…带 [cite:n] 的答案…",
@@ -57,6 +65,29 @@ agent 使用契约全文(与 MCP instructions 同源):`{status, instructions}`
 smart-ask(默认开,`PHAROS_SMART_ASK=off` 关;设计见 DESIGN D9):响应另含
 `auto: ["table_leg_retry"?]`(自动动作留痕——数值题第一轮拒答时带 kind=table 补检腿重问一轮)与
 `hints: [...]`(仅当最终答案仍为拒答/部分拒答时,≤3 条可操作建议;正常答案为空数组)。
+smart-ask 属于 `direct` 路径；Agent 路径由自己的证据循环决定是否补检。
+
+当 `mode=agent|auto` 时，响应额外包含：
+
+```json
+{
+  "route":{"requested_mode":"auto","selected_mode":"direct|agent","reasons":["complex_query"]},
+  "trace":[{"step":1,"action":"retrieve","returned":4,"new_evidence":4}],
+  "budget":{"steps":4,"retrievals":2,"llm_calls":3,"elapsed_ms":842.1,
+            "limits":{"max_steps":10,"max_retrievals":3,"max_llm_calls":4,"timeout_seconds":45}},
+  "degraded":false
+}
+```
+
+`trace` 只记录动作、数量、稳定原因码和补检词，不返回模型思维过程。检索结果先经过同一套 ACL
+出口复核，再交给证据判断器；控制器格式错误或暂时不可用时，若已有安全证据则降级到 direct。
+
+### POST /v1/agent/ask —— 强制 Agentic RAG
+
+请求字段与 `/v1/ask` 相同，但始终按 `mode=agent` 执行（即使请求体传了其他 mode）。这是给前端
+“深度检索”按钮和 Agentic RAG 演示保留的明确入口；常规业务建议使用 `/v1/ask` 的 `auto` 模式。
+
+状态机、预算和安全边界见 [AGENTIC_RAG.md](AGENTIC_RAG.md)。
 
 ### POST /v1/retrieve —— 混合检索(+ small-to-big 上下文)
 请求:`{query, top_k?, rerank?=false, doc_ids?, doc_type?, kind?, mode?="full"|"concise",

@@ -17,6 +17,7 @@ import os
 
 from embedder import EmbedConfig, Retriever, User, acl_admits
 from generator import Generator, OpenAICompatibleLLM
+from .agentic import AgentLimits, AgenticRunner
 
 
 def build_retriever(cfg) -> Retriever:
@@ -59,3 +60,16 @@ def build_generator(retriever, cfg):
     # PHAROS_ASK_MAX_CONTEXT_TOKENS(0=不限)→ 闭管道 context 总量软预算(换小上下文 LLM 后端时防超窗 400)
     return Generator(retriever, llm, acl_check=acl_admits,
                      max_context_tokens=cfg.ask_max_context_tokens or None)
+
+
+def build_agentic_runner(generator, cfg) -> AgenticRunner:
+    """构造请求级 Agent 状态机；控制判断和最终回答共用 Generator 的 LLM 与安全证据面。"""
+    limits = AgentLimits(
+        max_steps=max(1, cfg.agent_max_steps),
+        max_retrievals=max(1, cfg.agent_max_retrievals),
+        max_llm_calls=max(1, cfg.agent_max_llm_calls),
+        timeout_seconds=max(0.1, cfg.agent_timeout_seconds),
+        max_subqueries=max(1, cfg.agent_max_subqueries),
+        max_evidence_chars=max(1000, cfg.agent_max_evidence_chars),
+    )
+    return AgenticRunner(generator, limits=limits)

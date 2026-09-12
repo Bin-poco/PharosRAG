@@ -144,6 +144,13 @@ class PharosConfig:
     llm_model: str = "deepseek-v4-flash"
     llm_api_key_env: str = "DEEPSEEK_API_KEY"
     llm_max_tokens: int = 2000
+    # Agentic RAG 请求级硬预算。默认保守，先用评估集证明收益后再放宽。
+    agent_max_steps: int = 10
+    agent_max_retrievals: int = 3
+    agent_max_llm_calls: int = 4
+    agent_timeout_seconds: float = 45.0
+    agent_max_subqueries: int = 2
+    agent_max_evidence_chars: int = 12000
 
 
 def from_env() -> PharosConfig:
@@ -204,6 +211,12 @@ def from_env() -> PharosConfig:
         llm_model=os.environ.get("PHAROS_LLM_MODEL", "deepseek-v4-flash"),
         llm_api_key_env=os.environ.get("PHAROS_LLM_API_KEY_ENV", "DEEPSEEK_API_KEY"),
         llm_max_tokens=_int_env("PHAROS_LLM_MAX_TOKENS", 2000),
+        agent_max_steps=_int_env("PHAROS_AGENT_MAX_STEPS", 10),
+        agent_max_retrievals=_int_env("PHAROS_AGENT_MAX_RETRIEVALS", 3),
+        agent_max_llm_calls=_int_env("PHAROS_AGENT_MAX_LLM_CALLS", 4),
+        agent_timeout_seconds=_float_env("PHAROS_AGENT_TIMEOUT_SECONDS", 45.0),
+        agent_max_subqueries=_int_env("PHAROS_AGENT_MAX_SUBQUERIES", 2),
+        agent_max_evidence_chars=_int_env("PHAROS_AGENT_MAX_EVIDENCE_CHARS", 12000),
     )
 
 

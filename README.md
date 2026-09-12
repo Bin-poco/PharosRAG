@@ -33,7 +33,7 @@ One knowledge base, one door for each kind of consumer:
 
 | Exit | Command | Who uses it | What it does |
 |---|---|---|---|
-| **HTTP API** | `pharos serve` | curl, scripts, frontends | Closed-pipeline QA: `/v1/ask` runs retrieve → grounding → DeepSeek → an answer with citations, plus six retrieval endpoints |
+| **HTTP API** | `pharos serve` | curl, scripts, frontends | `/v1/ask` supports direct / bounded agent / auto routing; `/v1/agent/ask` explicitly runs observable multi-step retrieval |
 | **MCP** | `pharos mcp` | agents such as Claude Code | Agentic RAG: when to retrieve, how to rewrite, whether to go multi-hop — the agent decides |
 
 Both doors share one set of semantics, held in place by two rules: the tool contract has exactly one source (`toolcore`, so the stdio and HTTP sides cannot drift), and identity is decided server-side (an agent cannot edit its own permissions).
@@ -80,6 +80,11 @@ stale-job recovery; failed jobs can be restarted without losing their history. S
 [the reliable-job design](docs/RELIABLE_UPLOAD_JOBS.md). The management API also supports tenant-scoped upload
 inventory, reindexing, fail-closed ACL changes and auditable soft deletion; see
 [document lifecycle management](docs/DOCUMENT_LIFECYCLE.md).
+
+HTTP clients can choose `mode:"direct"`, `mode:"agent"`, or `mode:"auto"` on `/v1/ask`.
+The bounded Agentic path grades the current evidence, rewrites focused retrieval queries when evidence is missing,
+merges and deduplicates the results, and returns a safe trace plus request budgets. See
+[the Agentic RAG design](docs/AGENTIC_RAG.md) and [the API contract](docs/API.md#post-v1ask--direct--agent--auto-问答).
 
 ```bash
 conda activate pharos

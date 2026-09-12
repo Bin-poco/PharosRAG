@@ -35,6 +35,20 @@ class Generator:
     def answer(self, query: str, user, top_k=None, rerank: bool = False,
                doc_ids=None, doc_type=None, kind=None, strategy=None, extra_legs=None,
                max_context_tokens: int | None = None) -> Answer:
+        results = self.retrieve(query, user, top_k=top_k, rerank=rerank,
+                                doc_ids=doc_ids, doc_type=doc_type, kind=kind,
+                                strategy=strategy, extra_legs=extra_legs)
+        return self.answer_from_results(query, user, results,
+                                        max_context_tokens=max_context_tokens)
+
+    def retrieve(self, query: str, user, top_k=None, rerank: bool = False,
+                 doc_ids=None, doc_type=None, kind=None, strategy=None,
+                 extra_legs=None) -> list[dict]:
+        """执行检索但不调用 LLM。
+
+        闭管道由 :meth:`answer` 直接消费；Agentic 编排则可以先检查证据、继续检索，
+        最后把多轮结果交给 :meth:`answer_from_results`。两条出口共享同一检索参数语义。
+        """
         # N3(Pharos 评审后落地):可选检索过滤/选路透传给 retriever。**按需传**——不设的参数不出现在
         # 调用里,老的窄签名 retriever(单测 mock / smoke)与既有调用(eval)零影响。
         # 动机实证:"数字埋在表里"的题,通用问法下表格块被 MD&A 散文挤出 top-k,kind='table' 一击命中。
@@ -62,6 +76,15 @@ class Generator:
                     if cid not in seen:
                         seen.add(cid)
                         results.append(r)
+        return results
+
+    def prepare_contexts(self, results: list[dict], user,
+                         max_context_tokens: int | None = None) -> tuple[list[dict], list[dict]]:
+        """把检索结果转换为 ACL 复核后的安全证据与引用元数据。
+
+        Agent 的证据判断与最终生成必须都走这里，避免控制模型看到最终生成器会拒绝的越权块，
+        也保证表格 ``content_raw``、章节范围和 context 预算的处理不发生两套实现漂移。
+        """
         contexts, meta = [], []
         for r in results:
             hit, ctx = r["hit"], r["context"]
@@ -103,6 +126,17 @@ class Generator:
                     break
                 n_keep += 1
             contexts, meta = contexts[:n_keep], meta[:n_keep]
+        return contexts, meta
+
+    def answer_from_results(self, query: str, user, results: list[dict],
+                            max_context_tokens: int | None = None) -> Answer:
+        """使用已检索结果生成答案；供 Agent 复用多轮证据而不重复查询。"""
+        contexts, meta = self.prepare_contexts(
+            results, user, max_context_tokens=max_context_tokens)
+        return self.answer_from_contexts(query, contexts, meta)
+
+    def answer_from_contexts(self, query: str, contexts: list[dict], meta: list[dict]) -> Answer:
+        """使用已通过 ACL/预算处理的证据生成带引用答案。"""
         messages = self.pb.build(query, contexts)
         if not contexts:   # R3.E:零召回 -> 确定性返回"信息不足",不把作答权交给 LLM(grounding 退路不再靠模型听话)
             return Answer(text="I don't have enough information in the provided context to answer.",

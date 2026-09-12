@@ -8,6 +8,22 @@
 
 ---
 
+## 0. 代码版本提示：现在有两种 Agentic 出口
+
+早期 Pharos 只有 **MCP 工具型 Agentic**：Claude Code 等外部 agent 自己调用六个检索工具；
+仓库内的 `/v1/ask` 只有闭管道。本轮改造又增加了 **服务端状态机型 Agentic**：
+
+- `/v1/ask` 支持 `mode=direct|agent|auto`；
+- `/v1/agent/ask` 强制运行有限步 Agent；
+- `src/pharos/agentic.py` 负责证据判断、检索词改写、补检、停止和 trace；
+- `src/generator/generate.py` 同时为 direct 与 agent 提供同一套 ACL 后证据整理和引用生成。
+
+本篇后面的历史评估结论仍然保留：它说明为什么 `direct` 仍是默认，而不是否认 Agentic 能力的存在。
+新状态机尚需在修正后的多跳评估集上与旧三路径重新做 paired 对比；在结果出来前，不能宣称它已经
+提高正确率。实现契约和当前代码阅读顺序见 [有限步 Agentic RAG 设计](../AGENTIC_RAG.md)。
+
+---
+
 ## 1. 概念底座:谁来决定"检索几次、怎么改写"
 
 任何 RAG 系统都要回答一个控制权问题:**检索循环由谁驱动?**
@@ -47,7 +63,7 @@ Claude Code (agent)                     curl / 脚本 / CLI
       │ stdio                                  │ HTTP
       ▼                                        ▼
 pharos mcp ──────HTTP──────▶  pharos serve(守护进程,独占 Qdrant + GPU 模型)
-(薄适配器,零 GPU,毫秒启动)         │  /v1/retrieve /v1/ask ... 六工具 + 闭管道
+(薄适配器,零 GPU,毫秒启动)         │  六检索工具 + direct/agent/auto 问答
                                        ▼
 pharos mcp --direct ────────▶  toolcore.py(工具语义单一来源,纯 stdlib)
 (stdio 直连引擎,守护进程没跑时的降级)        ▼
