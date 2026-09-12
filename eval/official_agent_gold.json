@@ -1,0 +1,479 @@
+{
+  "version": 1,
+  "corpus": "official-tech-docs-v1",
+  "description": "AI-assisted, source-grounded semantic benchmark for the production /v1/ask API. Every reference answer and fact is explicitly stored and should receive human review before external claims.",
+  "provenance": {
+    "authoring": "ai_assisted_explicit_cases",
+    "source_basis": "pinned_official_corpus",
+    "human_review": "pending"
+  },
+  "annotation_policy": {
+    "single": "A focused fact question answerable from one document.",
+    "multi_section": "Several facts must be combined from different sections of one document.",
+    "cross_doc": "The answer must synthesize evidence from two or more documents.",
+    "no_answer": "The requested fact is not present in the explicitly scoped documents; the grounded behavior is refusal."
+  },
+  "cases": [
+    {
+      "id": "single_fastapi_request_body",
+      "category": "single",
+      "tags": ["quick", "fastapi"],
+      "query": "在 FastAPI 中用 Pydantic 模型声明请求体，框架会自动提供哪些核心能力？",
+      "top_k": 5,
+      "doc_ids": ["fastapi__request_body"],
+      "gold": {
+        "reference_answer": "FastAPI 会读取 JSON，请求数据会经过类型转换和校验，错误时返回清晰的校验信息；模型还会生成 JSON Schema，进入 OpenAPI 和交互式文档，并给编辑器提供类型支持。",
+        "required_facts": [
+          {"id": "json_parse_validate", "description": "读取 JSON，并进行类型转换与数据校验"},
+          {"id": "validation_errors", "description": "数据无效时返回清晰的校验错误"},
+          {"id": "schema_docs", "description": "生成 JSON Schema，并用于 OpenAPI/交互式 API 文档"}
+        ],
+        "citation_doc_groups": [["fastapi__request_body"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "single_docker_volume_lifecycle",
+      "category": "single",
+      "tags": ["docker"],
+      "query": "Docker volume 与容器生命周期是什么关系，为什么适合持久化数据？",
+      "top_k": 5,
+      "doc_ids": ["docker__volumes"],
+      "gold": {
+        "reference_answer": "Volume 由 Docker 创建和管理，其内容存在于容器生命周期之外。删除容器会删除容器可写层，但不会自动删除 volume 中的数据，因此它适合需要跨容器重建保留的数据。",
+        "required_facts": [
+          {"id": "docker_managed", "description": "volume 由 Docker 创建和管理"},
+          {"id": "independent_lifecycle", "description": "volume 数据独立于容器生命周期"},
+          {"id": "survives_container_removal", "description": "删除容器不会自动删除 volume 数据"}
+        ],
+        "citation_doc_groups": [["docker__volumes"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "single_qdrant_point_updates",
+      "category": "single",
+      "tags": ["qdrant"],
+      "query": "Qdrant 中重复上传相同 point ID 会怎样？这对重试写入有什么意义？",
+      "top_k": 5,
+      "doc_ids": ["qdrant__points"],
+      "gold": {
+        "reference_answer": "相同 ID 的 point 再次上传会覆盖原 point。Qdrant 的 point 修改 API 是幂等的，因此客户端可以在写入失败或不确定时安全重试，而不会因为同一 ID 的重复请求产生重复 point。",
+        "required_facts": [
+          {"id": "same_id_overwrites", "description": "相同 point ID 的再次上传会覆盖原 point"},
+          {"id": "idempotent_updates", "description": "point 修改操作具有幂等性"},
+          {"id": "safe_retry", "description": "幂等性使客户端能够安全重试写入"}
+        ],
+        "citation_doc_groups": [["qdrant__points"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "single_celery_broker_backend",
+      "category": "single",
+      "tags": ["celery"],
+      "query": "Celery 的 broker 和 result backend 分别是不是必需的？RabbitMQ 与 Redis 作为 broker 有什么文档明确的差异？",
+      "top_k": 6,
+      "doc_ids": ["celery__first_steps"],
+      "gold": {
+        "reference_answer": "Celery 发送和接收消息需要 broker；只有需要保存或查询任务状态、返回值时才需要 result backend。RabbitMQ 被描述为功能完整、稳定、耐久且适合生产，Redis 也功能完整，但在突然终止或断电时更容易丢失数据。",
+        "required_facts": [
+          {"id": "broker_required", "description": "broker 是 Celery 工作所必需的"},
+          {"id": "backend_optional", "description": "result backend 只在需要保存/查询结果或状态时使用"},
+          {"id": "broker_tradeoff", "description": "RabbitMQ 偏稳定耐久，Redis 在突然终止时更易丢数据"}
+        ],
+        "citation_doc_groups": [["celery__first_steps"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "single_fastapi_testing",
+      "category": "single",
+      "tags": ["fastapi"],
+      "query": "FastAPI 文档中的 TestClient 基于什么库，普通同步测试为什么不需要写 await？",
+      "top_k": 5,
+      "doc_ids": ["fastapi__testing"],
+      "gold": {
+        "reference_answer": "TestClient 基于 HTTPX，接口与 HTTPX 相似。它让测试函数可以写成普通 def，并用同步 client 调用应用，因此普通测试不需要 await，可直接配合 pytest 和普通 assert。",
+        "required_facts": [
+          {"id": "based_on_httpx", "description": "TestClient 基于 HTTPX"},
+          {"id": "sync_test", "description": "普通测试可以使用 def 和同步 client，无需 await"},
+          {"id": "pytest_assert", "description": "可以直接配合 pytest 与普通 assert"}
+        ],
+        "citation_doc_groups": [["fastapi__testing"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_fastapi_lifespan",
+      "category": "multi_section",
+      "tags": ["quick", "fastapi"],
+      "query": "用 FastAPI lifespan 管理机器学习模型或数据库连接时，yield 前后分别做什么？它和 startup/shutdown 事件能否同时生效？",
+      "top_k": 6,
+      "doc_ids": ["fastapi__lifespan_events"],
+      "gold": {
+        "reference_answer": "lifespan 异步上下文管理器中，yield 前的代码在应用开始接收请求前运行，用于加载模型或建立连接；yield 后的代码在应用关闭时运行，用于释放资源。若提供 lifespan 参数，startup 和 shutdown 事件处理器不会再被调用，二者不是混用关系。",
+        "required_facts": [
+          {"id": "before_yield", "description": "yield 前在接收请求前初始化共享资源"},
+          {"id": "after_yield", "description": "yield 后在应用关闭时清理资源"},
+          {"id": "events_exclusive", "description": "设置 lifespan 后 startup/shutdown 事件处理器不会被调用"}
+        ],
+        "citation_doc_groups": [["fastapi__lifespan_events"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_fastapi_oauth2_jwt",
+      "category": "multi_section",
+      "tags": ["fastapi", "security"],
+      "query": "概括 FastAPI OAuth2 JWT 示例中的登录链路，并说明密码、JWT 签名和 sub 字段的安全含义。",
+      "top_k": 7,
+      "doc_ids": ["fastapi__oauth2_jwt"],
+      "gold": {
+        "reference_answer": "用户在登录时提交用户名和密码，服务端验证密码哈希并签发 bearer token；后续请求携带 token 而不是反复发送密码。JWT 是签名的而不是加密的，内容可能被读取；sub 表示 token 的主体，应存放在整个应用中唯一的字符串标识。密码应以哈希形式保存。",
+        "required_facts": [
+          {"id": "login_then_bearer", "description": "登录验证后签发 bearer token，后续请求使用 token"},
+          {"id": "password_hash", "description": "密码以安全哈希形式处理/存储"},
+          {"id": "signed_not_encrypted", "description": "JWT 是签名而非加密，内容并非保密"},
+          {"id": "subject", "description": "sub 是 token 主体的唯一字符串标识"}
+        ],
+        "citation_doc_groups": [["fastapi__oauth2_jwt"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_docker_resource_limits",
+      "category": "multi_section",
+      "tags": ["quick", "docker"],
+      "query": "Docker 容器默认有没有资源限制？请比较 memory、memory-reservation、memory-swap、cpus 和 cpu-shares 的作用。",
+      "top_k": 8,
+      "doc_ids": ["docker__resource_constraints"],
+      "gold": {
+        "reference_answer": "容器默认没有资源限制。memory 是内存硬上限；memory-reservation 是在主机资源争用时生效的软限制，若与硬限制同时设置应更低；memory-swap 表示内存加交换空间总量，和 memory 一起使用；cpus 是限制可用 CPU 计算量的便捷方式；cpu-shares 是发生争用时的相对权重，不是固定上限。",
+        "required_facts": [
+          {"id": "no_default_limits", "description": "容器默认没有资源限制"},
+          {"id": "hard_soft_memory", "description": "memory 是硬上限，memory-reservation 是更低的软限制"},
+          {"id": "swap_total", "description": "memory-swap 表示内存与 swap 的总量"},
+          {"id": "cpu_difference", "description": "cpus 是计算量上限，cpu-shares 是争用时相对权重"}
+        ],
+        "citation_doc_groups": [["docker__resource_constraints"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_docker_bind_mounts",
+      "category": "multi_section",
+      "tags": ["docker"],
+      "query": "使用 Docker bind mount 时，需要注意哪些覆盖、写权限、远程 daemon 和 --mount/--volume 行为差异？",
+      "top_k": 8,
+      "doc_ids": ["docker__bind_mounts"],
+      "gold": {
+        "reference_answer": "把 bind mount 挂到容器中已有内容的目录会遮住原有内容；默认可写，容器进程可能修改宿主机文件，可用只读选项降低风险。bind mount 绑定的是 Docker daemon 所在主机路径，远程 daemon 不能挂载客户端机器路径。--mount 更明确且源路径不存在时报错，--volume 会自动把不存在的源创建成目录。",
+        "required_facts": [
+          {"id": "obscures_data", "description": "挂载会遮住容器目标目录中原有内容"},
+          {"id": "writable_default", "description": "默认可写，可使用只读挂载限制宿主机修改"},
+          {"id": "daemon_host", "description": "路径属于 daemon 主机，远程 daemon 不能使用客户端本地路径"},
+          {"id": "mount_volume_syntax", "description": "--mount 在源不存在时报错，--volume 会创建目录"}
+        ],
+        "citation_doc_groups": [["docker__bind_mounts"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_qdrant_indexing",
+      "category": "multi_section",
+      "tags": ["qdrant"],
+      "query": "Qdrant 中 vector index 与 payload index 各解决什么问题？为什么建议在大量数据写入前创建会用于过滤的 payload index？",
+      "top_k": 7,
+      "doc_ids": ["qdrant__indexing"],
+      "gold": {
+        "reference_answer": "vector index 用于加速向量相似度搜索，payload index 用于加速过滤并帮助估计过滤条件基数、选择查询计划。应只为实际过滤字段建索引，因为索引有内存或磁盘成本。在数据写入前创建 payload index，Qdrant 可在构建可过滤 HNSW 时加入过滤感知的边；事后创建可能需要重建相关 HNSW。",
+        "required_facts": [
+          {"id": "vector_index", "description": "vector index 加速向量相似度搜索"},
+          {"id": "payload_index", "description": "payload index 加速过滤并帮助查询规划/基数估计"},
+          {"id": "index_cost", "description": "应只索引实际用于过滤的字段，因为索引消耗资源"},
+          {"id": "before_ingest", "description": "提前建 payload index 可形成过滤感知 HNSW，事后可能需重建"}
+        ],
+        "citation_doc_groups": [["qdrant__indexing"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_qdrant_storage",
+      "category": "multi_section",
+      "tags": ["qdrant"],
+      "query": "Qdrant 的 cached 与 cold 存储模式如何取舍？WAL 和 payload index 在持久化与内存使用中分别扮演什么角色？",
+      "top_k": 7,
+      "doc_ids": ["qdrant__storage"],
+      "gold": {
+        "reference_answer": "向量持久化在磁盘并通过内存映射访问。cached 模式会预加载磁盘缓存，以更多内存换取更快的首次请求；cold 不预加载，内存更低但首次访问更慢。写操作先进入 WAL，用于崩溃恢复和保持更新顺序。payload 可选择缓存或 cold，但建立索引的字段会保留在内存中。",
+        "required_facts": [
+          {"id": "cached_cold", "description": "cached 预加载、耗内存但首次访问快；cold 相反"},
+          {"id": "memory_mapped", "description": "向量持久化在磁盘并以内存映射方式访问"},
+          {"id": "wal", "description": "写操作先进入 WAL，用于恢复和更新顺序"},
+          {"id": "indexed_payload_ram", "description": "被索引的 payload 字段会保留在内存"}
+        ],
+        "citation_doc_groups": [["qdrant__storage"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "multi_celery_task_reliability",
+      "category": "multi_section",
+      "tags": ["quick", "celery"],
+      "query": "根据 Celery tasks 文档，任务为什么应设计成幂等？acks_late、autoretry_for、retry_backoff 和 jitter 如何配合？",
+      "top_k": 8,
+      "doc_ids": ["celery__tasks"],
+      "gold": {
+        "reference_answer": "任务应幂等，使同一输入被重复执行不会造成意外副作用。默认消息在执行前确认；只有任务幂等时才适合用 acks_late 把确认推迟到任务返回之后。autoretry_for 可对指定异常自动重试；retry_backoff 启用指数退避，典型间隔为 1、2、4、8 秒，并默认加入随机 jitter，降低大量任务同时重试的风险。",
+        "required_facts": [
+          {"id": "idempotent", "description": "幂等任务可安全处理重复执行"},
+          {"id": "acks_late", "description": "acks_late 在任务返回后确认，适合幂等任务"},
+          {"id": "autoretry", "description": "autoretry_for 对指定异常自动重试"},
+          {"id": "backoff_jitter", "description": "retry_backoff 使用指数退避且默认带 jitter"}
+        ],
+        "citation_doc_groups": [["celery__tasks"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_fastapi_background_celery",
+      "category": "cross_doc",
+      "tags": ["quick", "fastapi", "celery"],
+      "query": "文档上传后的解析任务可能持续几分钟。请比较 FastAPI BackgroundTasks 和 Celery，给出选择建议，并包含 Celery broker、任务幂等和晚确认注意点。",
+      "top_k": 8,
+      "doc_ids": ["fastapi__background_tasks", "celery__first_steps", "celery__tasks"],
+      "gold": {
+        "reference_answer": "BackgroundTasks 在响应返回后于同一应用进程执行，适合小型、无需独立进程的工作。几分钟的重计算更适合 Celery，因为它能通过 broker 把任务交给其他进程或服务器。Celery 的 broker 是必需的；任务应幂等，若启用 acks_late，消息在任务返回后确认，因此尤其需要能安全重复执行。",
+        "required_facts": [
+          {"id": "background_small", "description": "BackgroundTasks 在响应后执行，适合较小且同进程的工作"},
+          {"id": "celery_heavy", "description": "重计算适合 Celery，可分布到其他进程/服务器"},
+          {"id": "broker_required", "description": "Celery 需要 broker"},
+          {"id": "idempotent_late_ack", "description": "任务应幂等，acks_late 在任务返回后确认"}
+        ],
+        "citation_doc_groups": [["fastapi__background_tasks"], ["celery__first_steps", "celery__tasks"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_docker_volume_bind",
+      "category": "cross_doc",
+      "tags": ["quick", "docker"],
+      "query": "比较 Docker volume 与 bind mount 的管理方式、宿主机耦合、迁移性和典型使用场景，并给出选择建议。",
+      "top_k": 7,
+      "doc_ids": ["docker__volumes", "docker__bind_mounts"],
+      "gold": {
+        "reference_answer": "Volume 由 Docker 管理、独立于容器生命周期，通常更容易备份、迁移和跨容器共享，适合持久化应用数据。Bind mount 直接映射 daemon 主机的具体文件或目录，依赖主机目录结构，但方便容器与宿主机共享源码、构建产物或配置。需要 Docker 管理和可移植的数据时选 volume，需要直接操作宿主机文件时选 bind mount，并按需设为只读。",
+        "required_facts": [
+          {"id": "volume_managed", "description": "volume 由 Docker 管理且独立于容器生命周期"},
+          {"id": "volume_portable", "description": "volume 更适合备份、迁移和持久化数据"},
+          {"id": "bind_host_path", "description": "bind mount 映射 daemon 主机具体路径并与主机耦合"},
+          {"id": "scenario_choice", "description": "持久数据优先 volume，直接共享宿主机文件使用 bind mount"}
+        ],
+        "citation_doc_groups": [["docker__volumes"], ["docker__bind_mounts"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_docker_secrets",
+      "category": "cross_doc",
+      "tags": ["docker", "security"],
+      "query": "Docker Compose secrets 与 build secrets 分别在哪个阶段使用、如何暴露给容器或构建步骤？为什么不能用 ARG/ENV 传构建密钥？",
+      "top_k": 7,
+      "doc_ids": ["docker__compose_secrets", "docker__build_secrets"],
+      "gold": {
+        "reference_answer": "Compose secrets 用于运行时，服务必须被显式授予某个 secret，随后以文件形式挂载到容器的 /run/secrets/<name>。Build secrets 和 SSH mounts 用于镜像构建期间，只临时暴露给指定 RUN 步骤。ARG 和 ENV 不适合秘密，因为其值会持久化在最终镜像或元数据中。",
+        "required_facts": [
+          {"id": "compose_runtime", "description": "Compose secret 是运行时按服务授权并以文件挂载"},
+          {"id": "build_temporary", "description": "build secret/SSH mount 只在指定构建步骤临时可用"},
+          {"id": "arg_env_persist", "description": "ARG/ENV 可能把秘密持久化到镜像或元数据"}
+        ],
+        "citation_doc_groups": [["docker__compose_secrets"], ["docker__build_secrets"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_docker_networking",
+      "category": "cross_doc",
+      "tags": ["docker"],
+      "query": "Compose 中 web 如何连接 db？说明服务名、容器端口、宿主机发布端口、用户自定义 bridge 和仅绑定 localhost 的关系。",
+      "top_k": 8,
+      "doc_ids": ["docker__compose_networking", "docker__bridge_network", "docker__port_publishing"],
+      "gold": {
+        "reference_answer": "Compose 默认把服务接入项目网络并提供基于服务名的发现，所以 web 应连接 db:容器端口，而不是依赖会变化的容器 IP 或宿主机发布端口。用户自定义 bridge 同样提供自动 DNS，并能把应用隔离在指定网络。发布端口是让网络外部访问容器；未指定宿主机地址通常会绑定所有接口，如只需本机访问应显式绑定 127.0.0.1 或 ::1。",
+        "required_facts": [
+          {"id": "service_dns", "description": "Compose 服务通过稳定服务名发现彼此"},
+          {"id": "container_port", "description": "服务间通信使用容器端口而非宿主机发布端口"},
+          {"id": "bridge_dns_isolation", "description": "用户自定义 bridge 提供 DNS 和网络隔离"},
+          {"id": "publish_localhost", "description": "发布端口用于外部访问，只需本机时绑定 localhost"}
+        ],
+        "citation_doc_groups": [["docker__compose_networking"], ["docker__bridge_network", "docker__port_publishing"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_docker_build_image",
+      "category": "cross_doc",
+      "tags": ["docker"],
+      "query": "如何同时利用 Docker 多阶段构建和构建缓存，做出较小且可快速重复构建的镜像？",
+      "top_k": 7,
+      "doc_ids": ["docker__multi_stage_builds", "fastapi__docker_deployment"],
+      "gold": {
+        "reference_answer": "多阶段 Dockerfile 使用多个 FROM，把编译或依赖构建放在前一阶段，只 COPY 运行产物到最终阶段，从而不把构建工具带入运行镜像。为利用缓存，应先复制变化较少的依赖清单并安装依赖，再复制经常变化的应用代码；代码改变时就不必重跑依赖层。命名构建阶段还能避免阶段顺序变化破坏 COPY 引用。",
+        "required_facts": [
+          {"id": "multi_from", "description": "多阶段构建使用多个 FROM 并只复制所需产物到最终镜像"},
+          {"id": "omit_build_tools", "description": "最终镜像不包含构建工具和中间产物"},
+          {"id": "cache_order", "description": "先复制依赖清单并安装，再复制频繁变化的应用代码"}
+        ],
+        "citation_doc_groups": [["docker__multi_stage_builds"], ["fastapi__docker_deployment"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_qdrant_multitenancy",
+      "category": "cross_doc",
+      "tags": ["quick", "qdrant", "security"],
+      "query": "为 Qdrant 设计多租户检索：比较每租户 collection、tenant_id payload 过滤和 tenant shard，并说明 payload index 应怎样配置。",
+      "top_k": 8,
+      "doc_ids": ["qdrant__multitenancy", "qdrant__filtering", "qdrant__indexing"],
+      "gold": {
+        "reference_answer": "大量租户各建 collection 会带来额外资源开销，通常更适合共享 collection，把 tenant_id 放入 payload，并在每次查询中强制过滤。tenant_id 应建立 keyword payload index，并可标记 is_tenant=true 以优化租户型过滤；最好在数据写入前建索引。租户数量较少且每个很大、需要更强物理资源隔离时，可用 user-defined shard，每租户 shard 的资源成本更高；还可让小租户共享、把大租户提升到独立 shard。",
+        "required_facts": [
+          {"id": "collection_overhead", "description": "大量每租户 collection 通常效率低、资源开销高"},
+          {"id": "payload_filter", "description": "共享 collection 时每次查询强制 tenant_id payload 过滤"},
+          {"id": "tenant_index", "description": "tenant_id 使用 keyword payload index，可设置 is_tenant=true，并宜提前创建"},
+          {"id": "tenant_shard", "description": "少量大租户或更强隔离可用 tenant shard，但资源成本更高"}
+        ],
+        "citation_doc_groups": [["qdrant__multitenancy"], ["qdrant__filtering", "qdrant__indexing"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_qdrant_hybrid_quantization",
+      "category": "cross_doc",
+      "tags": ["qdrant"],
+      "query": "在 Qdrant 中怎样组合 dense、sparse、prefetch、融合和 quantization，构建兼顾召回与速度的两阶段检索？",
+      "top_k": 8,
+      "doc_ids": ["qdrant__hybrid_queries", "qdrant__quantization"],
+      "gold": {
+        "reference_answer": "可在 prefetch 中分别执行 dense 与 sparse 检索形成候选，再用 RRF 或 DBSF 融合。多阶段查询可以先用成本较低或量化后的表示宽召回较多候选，再对候选用更精确的向量或方法重排。Quantization 通过压缩向量降低内存并加速搜索，但可能损失召回；保留原始向量并启用 rescoring 可以对量化候选再打精确分数。",
+        "required_facts": [
+          {"id": "dense_sparse_prefetch", "description": "dense 与 sparse 可分别 prefetch 候选"},
+          {"id": "fusion", "description": "候选可使用 RRF 或 DBSF 融合"},
+          {"id": "two_stage", "description": "先低成本宽召回，再用更精确表示重排"},
+          {"id": "quantization_tradeoff", "description": "量化节省内存并加速但可能损失召回，可用原始向量 rescoring"}
+        ],
+        "citation_doc_groups": [["qdrant__hybrid_queries"], ["qdrant__quantization"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_qdrant_availability",
+      "category": "cross_doc",
+      "tags": ["qdrant"],
+      "query": "自托管 Qdrant 要兼顾故障恢复和未来扩容，应如何考虑 WAL、snapshot、replication factor 与 shard 数量？",
+      "top_k": 9,
+      "doc_ids": ["qdrant__storage", "qdrant__snapshots", "qdrant__distributed_deployment"],
+      "gold": {
+        "reference_answer": "WAL 先记录更新，帮助节点崩溃后恢复一致状态，但它不替代可下载、恢复的 collection snapshot。分布式部署中 replication factor 至少为 2 才能让一个副本故障时仍有副本服务。自托管环境的 shard 数不能原地修改，规划时宜使 shard 数是节点数的倍数，并为未来增加节点预留足够 shard；官方示例建议每节点至少两个 shard，预期增长时可考虑 12 个。自托管扩容后通常还需手动移动 shard 或重建 collection。",
+        "required_facts": [
+          {"id": "wal_recovery", "description": "WAL 先记录更新并支持崩溃恢复"},
+          {"id": "snapshot", "description": "snapshot 可创建/下载/恢复，用于备份恢复"},
+          {"id": "replication", "description": "replication factor 至少为 2 才有副本冗余"},
+          {"id": "shard_planning", "description": "自托管 shard 数固定，应按节点倍数并为扩容预留"}
+        ],
+        "citation_doc_groups": [["qdrant__storage"], ["qdrant__snapshots"], ["qdrant__distributed_deployment"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "cross_fastapi_workers_docker",
+      "category": "cross_doc",
+      "tags": ["fastapi", "docker"],
+      "query": "FastAPI 在单机直接部署和 Kubernetes 等容器集群部署时，worker 进程数策略为什么不同？还要注意什么启动与关闭细节？",
+      "top_k": 8,
+      "doc_ids": ["fastapi__server_workers", "fastapi__docker_deployment"],
+      "gold": {
+        "reference_answer": "在自己管理的单机上，可以用 --workers 启动多个 Uvicorn worker，利用多核并提供一定进程级复制。Kubernetes 等分布式容器系统已经在容器层负责复制，通常每个容器运行一个 Uvicorn 进程。Docker CMD 应使用 exec 形式，使终止信号直接到达进程并触发正常关闭和 lifespan 清理；部署还需另行处理 HTTPS、开机启动和重启等事项。",
+        "required_facts": [
+          {"id": "single_host_workers", "description": "单机可用多个 Uvicorn workers 利用多核"},
+          {"id": "one_process_container", "description": "分布式容器系统通常每容器一个 Uvicorn 进程"},
+          {"id": "exec_cmd", "description": "Docker CMD 使用 exec 形式以正确接收终止信号并优雅关闭"},
+          {"id": "deployment_concerns", "description": "还需处理 HTTPS、启动和重启等部署问题"}
+        ],
+        "citation_doc_groups": [["fastapi__server_workers"], ["fastapi__docker_deployment"]],
+        "should_refuse": false
+      }
+    },
+    {
+      "id": "noanswer_fastapi_approval_contact",
+      "category": "no_answer",
+      "tags": ["quick", "no_answer", "fastapi"],
+      "query": "根据这些 FastAPI 部署文档，给出我们公司生产上线的最终审批人姓名和联系电话。",
+      "top_k": 6,
+      "doc_ids": ["fastapi__docker_deployment", "fastapi__server_workers"],
+      "gold": {
+        "reference_answer": "指定的通用 FastAPI 官方文档不包含用户公司的审批人姓名或联系电话，应明确说明信息不足，不能猜测。",
+        "required_facts": [],
+        "citation_doc_groups": [],
+        "should_refuse": true
+      }
+    },
+    {
+      "id": "noanswer_qdrant_guaranteed_qps",
+      "category": "no_answer",
+      "tags": ["no_answer", "qdrant"],
+      "query": "仅根据指定 Qdrant 文档，保证一个 3 节点集群在我们的数据上每秒能处理多少次混合检索？给出精确 QPS。",
+      "top_k": 7,
+      "doc_ids": ["qdrant__hybrid_queries", "qdrant__distributed_deployment"],
+      "gold": {
+        "reference_answer": "这些文档没有给出适用于用户数据、硬件和查询配置的保证 QPS，不能从节点数推导精确吞吐量；需要针对实际数据和配置做基准测试。",
+        "required_facts": [],
+        "citation_doc_groups": [],
+        "should_refuse": true
+      }
+    },
+    {
+      "id": "noanswer_qdrant_cloud_price",
+      "category": "no_answer",
+      "tags": ["no_answer", "qdrant"],
+      "query": "根据这些 Qdrant 技术文档，计算一套 12 shard、双副本云集群当前每月精确人民币价格。",
+      "top_k": 7,
+      "doc_ids": ["qdrant__distributed_deployment", "qdrant__storage"],
+      "gold": {
+        "reference_answer": "指定技术文档没有云服务的当前定价、所选硬件规格或汇率，因此无法计算精确人民币月价，应拒绝编造。",
+        "required_facts": [],
+        "citation_doc_groups": [],
+        "should_refuse": true
+      }
+    },
+    {
+      "id": "noanswer_docker_secret_value",
+      "category": "no_answer",
+      "tags": ["no_answer", "docker", "security"],
+      "query": "从指定 Docker secrets 文档中找出我们生产数据库的真实用户名和密码，并直接输出。",
+      "top_k": 6,
+      "doc_ids": ["docker__compose_secrets", "docker__build_secrets"],
+      "gold": {
+        "reference_answer": "官方示例只说明秘密的安全传递机制，不包含用户生产数据库的真实凭据，系统应明确拒绝或说明没有该信息，不能虚构值。",
+        "required_facts": [],
+        "citation_doc_groups": [],
+        "should_refuse": true
+      }
+    },
+    {
+      "id": "noanswer_celery_internal_sla",
+      "category": "no_answer",
+      "tags": ["quick", "no_answer", "celery"],
+      "query": "根据指定 Celery 文档，给出我们公司异步文档解析任务的正式 SLA、负责人和告警电话。",
+      "top_k": 6,
+      "doc_ids": ["celery__tasks", "celery__workers", "celery__routing"],
+      "gold": {
+        "reference_answer": "Celery 官方文档不包含用户公司的内部 SLA、负责人或告警电话，系统应说明知识库证据不足而不是猜测。",
+        "required_facts": [],
+        "citation_doc_groups": [],
+        "should_refuse": true
+      }
+    }
+  ]
+}

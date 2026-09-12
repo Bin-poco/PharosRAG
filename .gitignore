@@ -34,6 +34,7 @@ eval/_units/
 eval/_judge/
 eval/*_units*
 eval/*_judge*
+eval/benchmark_reports/
 
 # 大型可再生数据(解析产物/语料/分块;留在仓外,配置指向)
 corpus/

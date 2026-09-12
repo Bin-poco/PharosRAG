@@ -155,6 +155,31 @@ run_eval 把喂给 LLM 的 user message **原文**(PromptBuilder 组装的编号
 
 **--smart-tables 与产品同源**:eval 的失败驱动表格补检([run_eval.py:78-104](../../eval/run_eval.py#L78))与生产 smart-ask([src/pharos/service.py:336-353](../../src/pharos/service.py#L336))复用同一套信号函数——[generator/signals.py](../../src/generator/signals.py) 的 `looks_numeric` / `is_refusal` / `DEFAULT_TABLE_LEG` 单一来源,防两处词表漂移。**eval 与产品必须测同一策略同一参数,否则 eval 数字对产品无预测力**;代码注释里钉死"前置腿版本已被 88 题实测否决,勿改回"。
 
+### 2.9 当前生产 API 的人工 gold：为什么另开一条评估线
+
+历史 `run_eval.py` 主要从本地评估库构造 Generator/旧实验路径，适合复现过去的 72/88 题研究结论；
+它不是今天 Docker 服务中 `/v1/ask`、API key 身份、ACL、direct/agent/auto 路由和当前状态机的完整线上
+调用。把两者混起来会产生“评估代码通过，但生产接口没被测”的假安全感。
+
+所以当前生产 Agent 另有一条小而硬的评估线：
+
+- [`official_agent_gold.json`](../../eval/official_agent_gold.json)：26 道逐题编写、可人工复核的固定考卷，按
+  single 5 / multi_section 7 / cross_doc 9 / no_answer 5 分层；
+- [`agent_benchmark.py`](../../eval/agent_benchmark.py)：对真实 API 的同一道题依次运行 direct、agent、
+  auto，保留答案、被引原文、route、trace、预算和延迟；
+- 每题不只写一段参考答案，还把关键事实拆成 `required_facts`，把来源要求写成
+  `citation_doc_groups`。这与 TREC nugget 思路相同：答案换种措辞没有关系，关键是事实是否覆盖；
+- 程序可以无裁判统计引用作用域、引用组召回、明确拒答、预算、截断和 paired latency；无答案回答
+  可以引用已检查文档来解释知识范围，是否无引用仅作风格观察项；启用 Tier 1
+  裁判后再统计正确性、忠实度和事实召回。
+
+这里刻意使用“引用组召回”而非假装拥有精确 golden chunk：人工参考答案来自固定官方文档，但没有
+逐题把每个事实标到唯一 chunk ID；章节扩展和重切块也会改变 chunk ID。文档级来源组对切块版本更稳定，
+但它只能证明“引用了该来源”，不能证明“这句话答对了”，所以必须与事实裁判一起读。这是工程 benchmark
+常见的取舍：**稳定的粗粒度程序指标 + 成本更高的语义指标，不让任何单一数字冒充完整质量。**
+初版题目和参考答案由 AI 辅助、依据固定官方源整理，仍需人工逐题签字后才能称为“人工标注 gold”；
+这个 provenance 必须随结果一起保留。
+
 ---
 
 ## 3. 为什么这么设计:被否决的备选

@@ -20,6 +20,7 @@
 | 脚本 | 干什么 | 依赖 |
 |---|---|---|
 | `service_smoke.py` | 对已启动的生产 `/v1/ask` 跑官方语料冒烟矩阵，检查路由、预算、引用来源、截断与拒答 | HTTP 服务 + 在线 LLM |
+| `agent_benchmark.py` | 在真实 `/v1/ask` 上把人工 gold 成对跑 direct/agent/auto，输出分题型质量、成本和配对差值 | HTTP 服务 + 在线 LLM；裁判可选 |
 | `gen_gold.py` | **7.0(快速版)** 从 demo 索引采样 chunk,DeepSeek 据每段生成 (问题, golden 答案) → `gold.jsonl` | CPU + DeepSeek |
 | `run_eval.py` | **7.A/7.B** 跑系统出四指标；默认对比当前生产 `single/agent/auto`，也能复现历史 agentic/decompose 基线 | GPU + DeepSeek |
 | `acl_regression.py` | **7.C** 自建 2 租户合成库,断言跨租户/无权/unset 身份对受限内容 **0 召回** | GPU |
@@ -48,6 +49,48 @@ python eval/service_smoke.py --profile all    # 10 条，提交前运行
 `--json-out /tmp/pharos-smoke.json` 保存不含答案正文和 API key 的摘要。该矩阵是服务级 smoke test，
 不能替代带人工复核 golden chunk/answer 的正式质量 benchmark；它的作用是尽早发现真实调用链断裂和
 Agent 行为回退。
+
+## 官方语料人工 gold benchmark
+
+[`official_agent_gold.json`](official_agent_gold.json) 是当前生产路径的固定考卷，共 26 道逐题编写、
+可人工复核的问题：5 道单文档事实题、7 道单文档跨章节题、9 道跨文档综合题和 5 道无答案题。每道题都
+明确记录参考答案、必须覆盖的事实 ID、允许使用的文档范围和必须出现的引用来源组。它和 smoke 的
+职责不同：smoke 只证明接口不变量没坏；gold benchmark 才用来回答“答案质量如何、Agent 是否真的
+比 direct 有收益”。
+
+运行器直接调用已经启动的 `/v1/ask`，同一题使用完全相同的 `doc_ids`、`top_k` 和检索参数分别运行
+三种模式，并保存答案、引用原文、route、trace、预算与延迟：
+
+```bash
+set -a; source .env.mac; set +a
+
+# 9 道代表题 × 3 模式；先用它检查评估管道和线上配置
+.venv/bin/python eval/agent_benchmark.py --profile quick --judge none
+
+# 26 道 × 3 模式；DeepSeek 同厂裁判给出 Tier 1 正确性/忠实度趋势
+.venv/bin/python eval/agent_benchmark.py --profile all --judge deepseek
+
+# 只复测一道，或只比较 direct 与 agent
+.venv/bin/python eval/agent_benchmark.py --case cross_qdrant_multitenancy
+.venv/bin/python eval/agent_benchmark.py --profile all --modes direct,agent
+```
+
+每次结果写到被 gitignore 的 `eval/benchmark_reports/`，包括完整 JSON 和可读 Markdown。程序化指标有：
+
+- 接口/预算/截断契约通过率；
+- 引用是否越出指定文档作用域；
+- 要求的引用来源组召回；
+- 无答案题是否明确拒答，并单独观察其是否采用无引用的硬拒答风格；引用已检查文档来说明作用域不含
+  所求信息是允许的，是否夹带虚构事实由忠实度裁判判断；
+- 延迟、Agent 路由率，以及 Agent 响应报告的检索与 LLM 调用次数；
+- agent/auto 相对 direct 的同题 paired delta。
+
+启用 `--judge deepseek` 后才增加正确性、忠实度和必需事实召回。这个裁判与被测生成模型同厂，只应
+作为 Tier 1 回归趋势；简历或对外报告中的绝对数字，需要人工抽查或再做异厂双裁判。这份初版 gold
+是 AI 辅助逐题整理的 source-grounded starter set，不应冒充已经过领域专家标注；对外使用前还要由人
+逐题审核参考答案和必需事实。另一个口径限制是当前 direct 响应没有 `budget` 字段，因此 runner 不伪造
+其检索/LLM 调用数，报告中显示为 `—`；延迟和
+语义质量仍可做严格配对比较。
 
 ## 四个指标(run_eval)
 
