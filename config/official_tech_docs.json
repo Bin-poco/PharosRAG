@@ -1,0 +1,116 @@
+{
+  "corpus": "official-tech-docs-v1",
+  "description": "A reproducible starter corpus for the PharosRAG technical-document assistant.",
+  "documents": [
+    {
+      "doc_id": "fastapi__first_steps",
+      "title": "FastAPI - First Steps",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/first-steps.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/first-steps.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__request_body",
+      "title": "FastAPI - Request Body",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/body.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/body.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__docker_deployment",
+      "title": "FastAPI in Containers - Docker",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/deployment/docker.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/deployment/docker.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "docker__resource_constraints",
+      "title": "Docker Engine - Resource Constraints",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/containers/resource_constraints.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/containers/resource_constraints.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__volumes",
+      "title": "Docker Engine - Volumes",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/storage/volumes.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/storage/volumes.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__prune_unused_objects",
+      "title": "Docker Engine - Prune Unused Objects",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/manage-resources/pruning.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/manage-resources/pruning.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__what_is_qdrant",
+      "title": "Qdrant - What is Qdrant?",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/overview/what-is-qdrant.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/overview/what-is-qdrant.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__collections",
+      "title": "Qdrant - Collections",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/collections.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/collections.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__filtering",
+      "title": "Qdrant - Filtering",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/search/filtering.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/search/filtering.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__hybrid_queries",
+      "title": "Qdrant - Hybrid and Multi-Stage Queries",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/search/hybrid-queries.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/search/hybrid-queries.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "keys": [
+    {
+      "key": "local-dev-key-change-me-before-sharing",
+      "name": "local-dev",
+      "tenant": "demo",
+      "principals": ["g_dev"],
+      "roles": ["reader", "uploader"],
+      "admin": true
+    }
+  ]
+}

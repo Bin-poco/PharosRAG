@@ -464,6 +464,43 @@ def test_run_index_collects_failures_and_exits_nonzero(tmp_path, monkeypatch, ca
     assert "typeA__doc_bad" in str(ei.value), "退出消息须带失败清单供重跑"
 
 
+def test_run_index_passes_remote_inference_config(tmp_path, monkeypatch):
+    """Mac/云端建库必须走 remote，不能在 index 阶段退回本地 CUDA 模型。"""
+    import pharos.indexer as IX
+    corpus = tmp_path / "corpus"
+    (corpus / "tech__one").mkdir(parents=True)
+    monkeypatch.setattr(IX, "from_mineru_dir", lambda d: [SimpleNamespace(text="正文")])
+    monkeypatch.setattr(IX, "Chunker", lambda: SimpleNamespace(
+        chunk=lambda els, **kw: SimpleNamespace(chunks=[])))
+    captured = {}
+
+    class _FakeEmb:
+        def __init__(self, cfg):
+            captured["cfg"] = cfg
+
+        def index_document(self, *args, **kwargs):
+            return {}
+
+    monkeypatch.setattr(IX, "Embedder", _FakeEmb)
+    cfg = make_cfg(
+        qdrant_url="http://qdrant:6333",
+        inference_url="http://cloud-inference:8900",
+        inference_timeout=91.0,
+        inference_connect_timeout=4.0,
+        inference_retries=5,
+        inference_backoff=0.25,
+    )
+
+    assert IX.run_index(cfg, corpus=str(corpus), dest=str(tmp_path / "idx")) == 1
+    ecfg = captured["cfg"]
+    assert ecfg.qdrant_url == "http://qdrant:6333"
+    assert ecfg.inference_url == "http://cloud-inference:8900"
+    assert ecfg.inference_timeout == 91.0
+    assert ecfg.inference_connect_timeout == 4.0
+    assert ecfg.inference_retries == 5
+    assert ecfg.inference_backoff == 0.25
+
+
 # 修复6(收窄版):search_with_context 同节折叠计数外露(SearchResults.section_folded_n)
 def test_search_with_context_counts_section_folds():
     from embedder.retrieve import Retriever, SearchResults

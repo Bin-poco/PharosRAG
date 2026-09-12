@@ -1,0 +1,136 @@
+name: pharos-mac
+
+# Apple Silicon 本地开发拓扑：Qdrant + 无 GPU 的 Pharos + DashScope 在线推理适配器。
+# 与上游 docker-compose.yml（NVIDIA/WSL2 生产拓扑）并存，不覆盖原方案。
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    container_name: pharos-mac-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [pharos-net]
+
+  cloud-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud-inference
+    image: pharos-cloud-inference:mac-dev
+    container_name: pharos-mac-cloud-inference
+    restart: unless-stopped
+    env_file: [.env.mac]
+    environment:
+      CLOUD_IMAGE_ROOT: /data
+    command:
+      - uvicorn
+      - cloud_inference.service:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8900"
+      - --reload
+      - --reload-dir
+      - /app/cloud_inference
+    volumes:
+      - type: bind
+        source: ./src/cloud_inference
+        target: /app/cloud_inference
+        read_only: true
+      - type: bind
+        source: ./data
+        target: /data
+        read_only: true
+    ports:
+      - "127.0.0.1:8900:8900"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8900/readyz', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [pharos-net]
+
+  pharos:
+    build:
+      context: .
+      dockerfile: Dockerfile.pharos
+    image: pharos-app:mac-dev
+    container_name: pharos-mac-app
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file: [.env.mac]
+    environment:
+      PYTHONPATH: /app/src
+      PHAROS_QDRANT_URL: http://qdrant:6333
+      PHAROS_INFERENCE_URL: http://cloud-inference:8900
+      PHAROS_INDEX_DIR: /index
+      PHAROS_SIDECAR_DIR: /index/sidecar
+      PHAROS_CORPUS_DIR: /data/parsed
+      PHAROS_UPLOAD_DIR: /data/uploads
+      PHAROS_MAX_UPLOAD_BYTES: "10485760"
+      PHAROS_HOST: 0.0.0.0
+      PHAROS_PORT: "8787"
+      PHAROS_KEYS_FILE: /run/pharos/keys.json
+      # basename 必须与 cloud-inference /healthz 的 model_dense 完全一致。
+      PHAROS_DENSE_MODEL_PATH: /models/qwen3-vl-embedding
+      PHAROS_RERANK_MODEL_PATH: /models/qwen3-vl-rerank
+      PHAROS_GPU_NAME: ""
+      PHAROS_LOG_DIR: /index/logs
+    command:
+      - uvicorn
+      - pharos.service:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8787"
+      - --reload
+      - --reload-dir
+      - /app/src
+      - --timeout-graceful-shutdown
+      - "25"
+    volumes:
+      - type: bind
+        source: ./src
+        target: /app/src
+        read_only: true
+      - type: bind
+        source: ./data/index
+        target: /index
+      - type: bind
+        source: ./data
+        target: /data
+      - type: bind
+        source: ./data/secrets/pharos.keys.json
+        target: /run/pharos/keys.json
+        read_only: true
+    ports:
+      - "127.0.0.1:8787:8787"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      cloud-inference:
+        condition: service_healthy
+    healthcheck:
+      # 开发期允许“服务已启动但知识库尚未建立”；建库完成情况用 /readyz 单独检查。
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8787/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [pharos-net]
+
+networks:
+  pharos-net:
+    driver: bridge
+
+volumes:
+  qdrant-data:
