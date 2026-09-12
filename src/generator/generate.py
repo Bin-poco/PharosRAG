@@ -109,7 +109,10 @@ class Generator:
             # 实测会把分部营收错引申成公司总营收(Pharos N3 案例,根因=范围证据缺失,非模型不听话)。
             src = dm.get("title") or hit.doc_id
             sec = payload.get("section_path") or ""
-            contexts.append({"text": text, "source": f"{src} § {sec}" if sec else src})
+            # matched_text 给 Agent 证据控制器做预算内的“命中优先”摘要。最终回答仍使用完整 text，
+            # PromptBuilder 也只读取 text/source，因此不改变 direct RAG 的提示词与引用行为。
+            contexts.append({"text": text, "matched_text": hit.text or "",
+                             "source": f"{src} § {sec}" if sec else src})
             meta.append({"chunk_id": hit.chunk_id, "doc_id": hit.doc_id, "title": dm.get("title") or hit.doc_id,
                          "section": payload.get("section_path") or "", "page": payload.get("page_start", 0),
                          "text": text})   # R3.D:title 缺省兜底 doc_id(与喂给 LLM 的 source 一致,溯源不落空串)

@@ -18,6 +18,10 @@
 - `src/pharos/agentic.py` 负责证据判断、检索词改写、补检、停止和 trace；
 - `src/generator/generate.py` 同时为 direct 与 agent 提供同一套 ACL 后证据整理和引用生成。
 
+当前控制器会公平分配证据字符预算，并优先查看命中小块和 query 相关的章节窗口；补检无法继续但
+已经积累了可用证据时，会在剩余预算允许的前提下做一次带引用的尽力回答，而不是直接丢弃证据。
+固定版本官方文档生产烟测目前 10/10 通过，但它验证的是链路契约，不等于证明正确率优于 direct。
+
 本篇后面的历史评估结论仍然保留：它说明为什么 `direct` 仍是默认，而不是否认 Agentic 能力的存在。
 新状态机尚需在修正后的多跳评估集上与旧三路径重新做 paired 对比；在结果出来前，不能宣称它已经
 提高正确率。实现契约和当前代码阅读顺序见 [有限步 Agentic RAG 设计](../AGENTIC_RAG.md)。
@@ -496,8 +500,9 @@ python eval/run_eval.py --mode both --judge deepseek --limit 5
    工具面有 doc_ids cap 和 top_k 校验,但没有 per-agent 限流。
 4. **去重在多副本下降级到 1/N**:声明过的取舍,但意味着"省 agent context"的收益在 scale-out 后打折;
    如果未来 agent 会话普遍变长,这笔账要重算。
-5. **多轮 agentic 的生产化没做**:pharos 自己不host agent 循环(那是 MCP 出口 + Claude Code 的职责),
-   所以"agentic 路径"的生产形态依赖外部 agent 的质量,eval 里的 DeepSeek 驱动循环只是它的一个代理测量。
+5. **生产状态机已上线但质量结论未完成**:pharos 现在会在 `/v1/ask` 和 `/v1/agent/ask` 内运行有限步
+   多轮检索，10 道官方文档烟测已经通过；但烟测只验证路由、引用、预算和拒答契约。尚未完成至少
+   20～30 道人工 gold 多跳题的 paired 对比，因此不能宣称 agent 比 direct 提升了多少。
 
 一句话收尾:这套系统最硬的资产不是"接了 MCP",而是**用同一份语义服务三个入口、用 paired 数据裁决
 agent 该不该驱动检索、并且在发现测量仪器有偏时敢于给自己的结论打上"幅度存疑"**。
