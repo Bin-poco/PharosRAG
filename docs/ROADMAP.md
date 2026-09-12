@@ -4,6 +4,14 @@
 (已落地功能的动机/负结果/实测留档:检索智能见 [TESTING §3](TESTING.md) + [COMPONENT_NOTES](COMPONENT_NOTES.md);
 团队服务面见 [DESIGN D10-D12](DESIGN.md) + [OPERATIONS](OPERATIONS.md)。)
 
+## 最近交付
+
+- ✅ **多租户 Markdown/PDF 上传**：FastAPI 接收文件并由服务端身份派生 ACL；Markdown 本地标准化，
+  PDF 通过 MinerU 解析后复用 Chunker、Embedding、Qdrant 与 sidecar 建库链。
+- ✅ **可靠摄取任务**：PostgreSQL 保存文档/任务/Outbox，Redis + Celery 异步执行；支持指数退避、
+  Worker 心跳、失联恢复、租约防旧 Worker 覆盖，以及保留历史的人工重试。设计和故障演练见
+  [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
+
 ## 候选(按优先级)
 
 - **P1 stats 持久化 + logrotate**:`/v1/stats` 现为进程内、重启归零;请求日志单文件。团队长期运行需
@@ -12,9 +20,8 @@
   吊销日志 + `pharos keys list/revoke` 子命令。
 - **P2 per-key 速率限制**:当前无限流,吞吐天花板 ~3.2 req/s 下单个重度用户可饿死他人。按 key
   令牌桶,超限返回结构化 `rate_limited`。
-- **P2 解析编排**:`pharos parse <pdf|docx|xlsx…>` 调 MinerU(在线 API tokens 已有)→ 直接 ingest
-  新文档,让"加一篇文档"成为一条命令。解析现已在本仓(`scripts/parse_batch.py`/`parse_office.py`/
-  `mineru_client.py`,见 [scripts/README](../scripts/README.md));`pharos parse` 子命令化仍待做。
+- **P2 扩展 Office 上传**：当前 HTTP 上传支持 Markdown/PDF；下一步可把 DOCX/XLSX 标准化接入同一
+  可靠任务管道，并补 MIME 嗅探、配额和对象存储，避免应用节点共享本地上传目录。
 - **P2 表格向检索**:表格题当前 检索 0.750 / 正确 0.688(88 题基线);4 个检索 miss + 2 个大表读数错
   是对称标尺(TESTING §3)。候选:表格块 embed 增强、跨语言查询辅助。
 - **P3 LLM 有界重试**(COMPONENT_NOTES N6):DeepSeek 偶发 5xx 现打成 `ask_failed`;观察实际频率后
