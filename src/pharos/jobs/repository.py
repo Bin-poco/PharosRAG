@@ -439,14 +439,16 @@ class SQLJobRepository:
             session.flush()
             return self._record(document, job)
 
-    def recover_unclaimed(self, stale_seconds: int, limit: int = 100) -> dict:
+    def recover_unclaimed(self, stale_seconds: int, limit: int = 100,
+                          publishing_stale_seconds: int = 60) -> dict:
         """重新开放发布中断或已发布但长期未被 Worker 领取的消息。
 
         Redis 中仍然排队的原消息可能稍后到达，因此这里只恢复成 pending；真正执行仍由
         ``claim_by_job`` 的数据库行锁和 current-job 校验保证幂等。
         """
         now = utcnow()
-        cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
+        sent_cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
+        publishing_cutoff = now - timedelta(seconds=max(1, int(publishing_stale_seconds)))
         recovered = 0
         with Session(self.engine) as session, session.begin():
             rows = list(session.execute(
@@ -456,9 +458,9 @@ class SQLJobRepository:
                     or_(
                         (OutboxRow.status == "sent") &
                         OutboxRow.sent_at.is_not(None) &
-                        (OutboxRow.sent_at < cutoff),
+                        (OutboxRow.sent_at < sent_cutoff),
                         (OutboxRow.status == "publishing") &
-                        (OutboxRow.updated_at < cutoff),
+                        (OutboxRow.updated_at < publishing_cutoff),
                     ),
                     IngestionJobRow.status.in_({"queued", "retrying"}),
                     IngestionJobRow.available_at <= now,

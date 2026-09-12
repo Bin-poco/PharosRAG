@@ -74,7 +74,8 @@ def recover_stale_jobs(limit: int = 100):
     dispatcher = get_dispatcher()
     cfg = config.from_env()
     unclaimed = dispatcher.repository.recover_unclaimed(
-        cfg.job_dispatch_stale_seconds, limit=limit)
+        cfg.job_dispatch_stale_seconds, limit=limit,
+        publishing_stale_seconds=cfg.job_publish_stale_seconds)
     recovered = dispatcher.repository.recover_stale(cfg.job_stale_seconds, limit=limit)
     dispatched = dispatcher.dispatch_pending(limit=limit)
     return {**unclaimed, **recovered,

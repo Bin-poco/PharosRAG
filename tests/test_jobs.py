@@ -287,7 +287,8 @@ def test_stale_outbox_publish_reservation_is_recovered(tmp_path):
     assert repository.begin_outbox_publish("job_db1") is True
     with Session(repository.engine) as session, session.begin():
         outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
-        outbox.updated_at = utcnow() - timedelta(hours=2)
+        outbox.updated_at = utcnow() - timedelta(seconds=61)
 
-    assert repository.recover_unclaimed(stale_seconds=3600) == {"unclaimed_recovered": 1}
+    assert repository.recover_unclaimed(
+        stale_seconds=3600, publishing_stale_seconds=60) == {"unclaimed_recovered": 1}
     assert repository.list_pending_outbox() == ["job_db1"]
