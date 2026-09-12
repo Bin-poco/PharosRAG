@@ -95,6 +95,16 @@ class PharosConfig:
     collection: str = "real"
     dense_dim: int = 1024
     corpus_dir: str = ""         # 入库语料目录(MinerU 解析产物;留仓外,PHAROS_CORPUS_DIR)
+    upload_dir: str = ""         # 用户上传原文+标准化产物(留仓外,PHAROS_UPLOAD_DIR)
+    max_upload_bytes: int = 10 * 1024 * 1024
+    # 用户上传 PDF 的在线 MinerU 精准解析。token 只按环境变量名读取，不写进任务记录。
+    mineru_base_url: str = "https://mineru.net"
+    mineru_token_env: str = "MINERU_TOKEN_A"
+    mineru_model_version: str = "vlm"
+    mineru_language: str = "ch"
+    mineru_poll_seconds: float = 5.0
+    mineru_timeout_seconds: float = 1800.0
+    mineru_max_archive_bytes: int = 512 * 1024 * 1024
     # GPU / 本地模型(dense embedder + reranker;默认 ~/models,须含官方 scripts/;GPU 按名锁 4090)
     dense_model_path: str = os.path.expanduser("~/models/Qwen3-VL-Embedding-8B")
     rerank_model_path: str = os.path.expanduser("~/models/Qwen3-VL-Reranker-8B")
@@ -143,6 +153,16 @@ def from_env() -> PharosConfig:
         collection=_ns("COLLECTION", "real"),
         dense_dim=_int_ns("DENSE_DIM", 1024),
         corpus_dir=os.path.expanduser(os.environ.get("PHAROS_CORPUS_DIR", "").strip()),
+        upload_dir=os.path.expanduser(os.environ.get("PHAROS_UPLOAD_DIR", "").strip())
+                   or os.path.join(index_dir, "uploads"),
+        max_upload_bytes=_int_env("PHAROS_MAX_UPLOAD_BYTES", 10 * 1024 * 1024),
+        mineru_base_url=os.environ.get("PHAROS_MINERU_BASE_URL", "https://mineru.net").strip(),
+        mineru_token_env=os.environ.get("PHAROS_MINERU_TOKEN_ENV", "MINERU_TOKEN_A").strip(),
+        mineru_model_version=os.environ.get("PHAROS_MINERU_MODEL_VERSION", "vlm").strip(),
+        mineru_language=os.environ.get("PHAROS_MINERU_LANGUAGE", "ch").strip(),
+        mineru_poll_seconds=_float_env("PHAROS_MINERU_POLL_SECONDS", 5.0),
+        mineru_timeout_seconds=_float_env("PHAROS_MINERU_TIMEOUT_SECONDS", 1800.0),
+        mineru_max_archive_bytes=_int_env("PHAROS_MINERU_MAX_ARCHIVE_BYTES", 512 * 1024 * 1024),
         dense_model_path=os.path.expanduser(os.environ.get("PHAROS_DENSE_MODEL_PATH", "~/models/Qwen3-VL-Embedding-8B")),
         rerank_model_path=os.path.expanduser(os.environ.get("PHAROS_RERANK_MODEL_PATH", "~/models/Qwen3-VL-Reranker-8B")),
         gpu_name=os.environ.get("PHAROS_GPU_NAME", "4090"),
