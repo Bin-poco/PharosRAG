@@ -1,9 +1,14 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from pharos.indexer import load_doc_meta
-from pharos.markdown_ingest import MarkdownCorpusError, markdown_to_content_list
+from pharos.markdown_ingest import (
+    MarkdownCorpusError,
+    markdown_to_content_list,
+    rst_to_content_list,
+)
 
 
 def test_markdown_conversion_preserves_structure_and_code():
@@ -28,6 +33,48 @@ print("hello")
     assert any(item["type"] == "list" and item["list_items"] == ["one", "two"] for item in content)
     assert any("print(\"hello\")" in item.get("text", "") for item in content)
     assert not any("ignored front matter" in item.get("text", "") for item in content)
+
+
+def test_rst_conversion_preserves_headings_admonitions_lists_and_code():
+    source = """.. _tasks:
+
+====================
+       Tasks
+====================
+
+Tasks should ideally be idempotent.
+
+.. note::
+
+   A message can be redelivered.
+
+Retry options
+-------------
+
+- retry_backoff
+- max_retries
+
+#. first numbered item
+#. second numbered item continued
+   on another line
+
+.. code-block:: python
+
+   add.retry(countdown=5)
+"""
+    content = rst_to_content_list(source, title="Celery - Tasks", source_url="https://example.test/tasks")
+    assert any(item.get("text_level") == 1 and item["text"] == "Tasks" for item in content)
+    assert any(item.get("text_level") == 2 and item["text"] == "Retry options" for item in content)
+    assert any("idempotent" in item.get("text", "") for item in content)
+    assert any(item.get("text") == "Note" for item in content)
+    assert any("redelivered" in item.get("text", "") for item in content)
+    assert any(item.get("list_items") == ["retry_backoff", "max_retries"] for item in content)
+    assert any(item.get("list_items") == [
+        "first numbered item", "second numbered item continued on another line"
+    ] for item in content)
+    assert any("add.retry(countdown=5)" in item.get("text", "") for item in content)
+    assert not any("_tasks" in item.get("text", "") for item in content)
+    assert not any(set(item.get("text", "")) == {"="} for item in content if item.get("text"))
 
 
 def test_load_doc_meta_keeps_provenance_and_drops_acl(tmp_path):
@@ -133,3 +180,39 @@ def test_manifest_only_downloads_matching_doc(tmp_path, monkeypatch):
     assert count == 1 and fetched == ["https://example.test/binds"]
     assert (tmp_path / "out/docker__bind_mounts/metadata.json").exists()
     assert not (tmp_path / "out/docker__volumes").exists()
+
+
+def test_manifest_dispatches_rst_and_records_source_format(tmp_path, monkeypatch):
+    from pharos import markdown_ingest
+
+    manifest = {"documents": [{
+        "doc_id": "celery__tasks", "title": "Celery Tasks", "source_format": "rst",
+        "raw_url": "https://example.test/tasks.rst", "source_url": "https://example.test/tasks",
+    }]}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(markdown_ingest, "_download_text", lambda *_: "Tasks\n=====\n\nReliable tasks.")
+
+    assert markdown_ingest.import_manifest(path, tmp_path / "out") == 1
+    output = tmp_path / "out/celery__tasks"
+    metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
+    content = json.loads((output / "celery__tasks_content_list.json").read_text(encoding="utf-8"))
+    assert metadata["source_format"] == "rst"
+    assert (output / "source.rst").exists()
+    assert any(item.get("text_level") == 1 and item["text"] == "Tasks" for item in content)
+
+
+def test_official_manifest_is_large_pinned_and_uniquely_identified():
+    manifest_path = Path(__file__).parents[1] / "config/official_tech_docs.json"
+    documents = json.loads(manifest_path.read_text(encoding="utf-8"))["documents"]
+    doc_ids = [doc["doc_id"] for doc in documents]
+
+    assert len(documents) >= 30
+    assert len(doc_ids) == len(set(doc_ids))
+    for doc in documents:
+        assert len(doc["revision"]) == 40
+        assert doc["revision"] in doc["source_url"]
+        assert doc["revision"] in doc["raw_url"]
+        assert doc["source_url"].startswith("https://github.com/")
+        assert doc["raw_url"].startswith("https://raw.githubusercontent.com/")
+        assert doc["license"] in {"MIT", "Apache-2.0", "BSD-3-Clause"}

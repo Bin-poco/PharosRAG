@@ -36,6 +36,83 @@
       "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
     },
     {
+      "doc_id": "fastapi__dependencies",
+      "title": "FastAPI - Dependencies",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/dependencies/index.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/dependencies/index.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__oauth2_jwt",
+      "title": "FastAPI - OAuth2 with JWT",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/security/oauth2-jwt.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/security/oauth2-jwt.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__background_tasks",
+      "title": "FastAPI - Background Tasks",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/background-tasks.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/background-tasks.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__handling_errors",
+      "title": "FastAPI - Handling Errors",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/handling-errors.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/handling-errors.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__testing",
+      "title": "FastAPI - Testing",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/testing.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/tutorial/testing.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__lifespan_events",
+      "title": "FastAPI - Lifespan Events",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/advanced/events.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/advanced/events.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
+      "doc_id": "fastapi__server_workers",
+      "title": "FastAPI - Server Workers",
+      "topic": "fastapi",
+      "repository": "fastapi/fastapi",
+      "revision": "50113da16fec53b66b80d75e80a89296de4fa5a5",
+      "source_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/deployment/server-workers.md",
+      "raw_url": "https://raw.githubusercontent.com/fastapi/fastapi/50113da16fec53b66b80d75e80a89296de4fa5a5/docs/en/docs/deployment/server-workers.md",
+      "license": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/50113da16fec53b66b80d75e80a89296de4fa5a5/LICENSE"
+    },
+    {
       "doc_id": "docker__resource_constraints",
       "title": "Docker Engine - Resource Constraints",
       "topic": "docker",
@@ -76,6 +153,83 @@
       "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
       "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/manage-resources/pruning.md",
       "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/manage-resources/pruning.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__networking",
+      "title": "Docker Engine - Networking Overview",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/network/_index.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/network/_index.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__bridge_network",
+      "title": "Docker Engine - Bridge Network Driver",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/network/drivers/bridge.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/network/drivers/bridge.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__port_publishing",
+      "title": "Docker Engine - Port Publishing and Mapping",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/network/port-publishing.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/network/port-publishing.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__compose_networking",
+      "title": "Docker Compose - Networking",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/compose/how-tos/networking.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/compose/how-tos/networking.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__compose_secrets",
+      "title": "Docker Compose - Secrets",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/compose/how-tos/use-secrets.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/compose/how-tos/use-secrets.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__multi_stage_builds",
+      "title": "Docker Build - Multi-stage Builds",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/build/building/multi-stage.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/build/building/multi-stage.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
+      "doc_id": "docker__build_secrets",
+      "title": "Docker Build - Build Secrets",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/build/building/secrets.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/build/building/secrets.md",
       "license": "Apache-2.0",
       "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
     },
@@ -122,6 +276,142 @@
       "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/search/hybrid-queries.md",
       "license": "Apache-2.0",
       "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__points",
+      "title": "Qdrant - Points",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/points.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/points.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__payload",
+      "title": "Qdrant - Payload",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/payload.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/payload.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__indexing",
+      "title": "Qdrant - Indexing",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/indexing.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/indexing.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__multitenancy",
+      "title": "Qdrant - Multitenancy",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/multitenancy.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/multitenancy.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__quantization",
+      "title": "Qdrant - Quantization",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/quantization.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/quantization.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__storage",
+      "title": "Qdrant - Storage",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/storage.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/manage-data/storage.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__snapshots",
+      "title": "Qdrant - Snapshots",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/snapshots.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/snapshots.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "qdrant__distributed_deployment",
+      "title": "Qdrant - Distributed Deployment",
+      "topic": "qdrant",
+      "repository": "qdrant/landing_page",
+      "revision": "6ec807a54e20b682ac74203612067d629bb41d47",
+      "source_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/scaling/distributed_deployment.md",
+      "raw_url": "https://raw.githubusercontent.com/qdrant/landing_page/6ec807a54e20b682ac74203612067d629bb41d47/qdrant-landing/content/documentation/scaling/distributed_deployment.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/qdrant/landing_page/blob/6ec807a54e20b682ac74203612067d629bb41d47/LICENSE"
+    },
+    {
+      "doc_id": "celery__first_steps",
+      "title": "Celery - First Steps",
+      "topic": "celery",
+      "repository": "celery/celery",
+      "revision": "5ea4a4919aec6be425bf7103a18d011ffea1c5f1",
+      "source_format": "rst",
+      "source_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/getting-started/first-steps-with-celery.rst",
+      "raw_url": "https://raw.githubusercontent.com/celery/celery/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/getting-started/first-steps-with-celery.rst",
+      "license": "BSD-3-Clause",
+      "license_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/LICENSE"
+    },
+    {
+      "doc_id": "celery__tasks",
+      "title": "Celery - Tasks",
+      "topic": "celery",
+      "repository": "celery/celery",
+      "revision": "5ea4a4919aec6be425bf7103a18d011ffea1c5f1",
+      "source_format": "rst",
+      "source_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/userguide/tasks.rst",
+      "raw_url": "https://raw.githubusercontent.com/celery/celery/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/userguide/tasks.rst",
+      "license": "BSD-3-Clause",
+      "license_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/LICENSE"
+    },
+    {
+      "doc_id": "celery__routing",
+      "title": "Celery - Routing Tasks",
+      "topic": "celery",
+      "repository": "celery/celery",
+      "revision": "5ea4a4919aec6be425bf7103a18d011ffea1c5f1",
+      "source_format": "rst",
+      "source_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/userguide/routing.rst",
+      "raw_url": "https://raw.githubusercontent.com/celery/celery/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/userguide/routing.rst",
+      "license": "BSD-3-Clause",
+      "license_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/LICENSE"
+    },
+    {
+      "doc_id": "celery__workers",
+      "title": "Celery - Workers Guide",
+      "topic": "celery",
+      "repository": "celery/celery",
+      "revision": "5ea4a4919aec6be425bf7103a18d011ffea1c5f1",
+      "source_format": "rst",
+      "source_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/userguide/workers.rst",
+      "raw_url": "https://raw.githubusercontent.com/celery/celery/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/docs/userguide/workers.rst",
+      "license": "BSD-3-Clause",
+      "license_url": "https://github.com/celery/celery/blob/5ea4a4919aec6be425bf7103a18d011ffea1c5f1/LICENSE"
     }
   ]
 }
