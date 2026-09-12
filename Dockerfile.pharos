@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
 RUN pip install -i ${PIP_INDEX_URL} .   # ⬅ 不带 .[gpu] —— 这一行就是"脱 torch"的落地(走镜像源,build 可靠)
 
 # ⭐ 构建期脱 torch 断言:把"slim 被 torch 污染"从运行时提前到 build(装错立即 build fail)。

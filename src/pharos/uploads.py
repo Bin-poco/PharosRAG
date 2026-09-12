@@ -1,18 +1,16 @@
-"""文档上传的第一版竖向闭环。
+"""带 ACL 的 Markdown/PDF 文档上传与摄取编排。
 
 边界刻意很小:
   - 身份仍由 service 的 X-API-Key middleware 给出，本模块不信任客户端 tenant;
   - Markdown 本地标准化，PDF 交给 MinerU，再复用 Chunker + Embedder 现有建库链;
-  - 任务记录按文档原子写 JSON，便于本地开发;后续换 PostgreSQL/Celery 时 API 形状不变。
+  - PostgreSQL + Celery/Redis 提供可靠队列；未配置时保留 JSON + BackgroundTasks 本地兼容模式。
 
-BackgroundTasks 只是本地版执行器：进程重启不保证任务继续，所以不伪装成生产队列。
+BackgroundTasks 只是兼容执行器：进程重启不保证任务继续，不用于生产可靠性承诺。
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import os
 import shutil
 import threading
 import uuid
@@ -20,23 +18,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
-from chunker import Chunker
-from chunker.adapters.mineru import from_mineru
 from embedder import Embedder
 
-from .markdown_ingest import markdown_to_content_list
+from .ingestion import IngestionPipeline, UploadError, is_transient_ingestion_error
+from .jobs import FileJobRepository
 from .mineru import MinerUClient, MinerUError
 
 log = logging.getLogger("pharos")
 
 ALLOWED_SUFFIXES = {".md", ".markdown", ".pdf"}
 ACCESS_SCOPES = {"private", "restricted", "tenant"}
-
-
-class UploadError(ValueError):
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
+MAX_FILENAME_CHARS = 512
+MAX_CONTENT_TYPE_CHARS = 160
 
 
 def personal_principal(identity) -> str:
@@ -82,18 +75,29 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def retry_delay_seconds(attempt: int, job_id: str) -> int:
+    """指数退避并加入稳定抖动，防止一批故障任务同时冲击外部服务。"""
+    base = min(300, 10 * (3 ** max(0, int(attempt) - 1)))
+    spread = max(1, base // 5)
+    jitter = int(hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:8], 16) % spread
+    return base + jitter
+
+
 class DocumentUploadManager:
     """持久化上传记录并复用现有引擎建立单篇 Markdown/PDF 索引。"""
 
     def __init__(self, root: str, retriever, max_bytes: int = 10 * 1024 * 1024,
-                 mineru_client: MinerUClient | None = None):
+                 mineru_client: MinerUClient | None = None, repository=None,
+                 max_attempts: int = 3):
         self.root = Path(root).expanduser().resolve()
         self.retriever = retriever
         self.max_bytes = max(1, int(max_bytes))
         self.mineru_client = mineru_client
+        self.max_attempts = max(1, int(max_attempts))
         self._lock = threading.RLock()
-        self._embedder = None
+        self._pipeline = None
         self.root.mkdir(parents=True, exist_ok=True)
+        self.repository = repository or FileJobRepository(self.root)
 
     def _doc_dir(self, doc_id: str) -> Path:
         # doc_id 完全由服务端生成;仍用 resolve 不变量防未来调用方误传。
@@ -101,28 +105,6 @@ class DocumentUploadManager:
         if not path.is_relative_to(self.root):
             raise UploadError("invalid_doc_id", "非法 document id。")
         return path
-
-    @staticmethod
-    def _record_path(doc_dir: Path) -> Path:
-        return doc_dir / "record.json"
-
-    def _write_record(self, record: dict) -> None:
-        doc_dir = self._doc_dir(record["document_id"])
-        doc_dir.mkdir(parents=True, exist_ok=True)
-        path = self._record_path(doc_dir)
-        tmp = path.with_suffix(".json.tmp")
-        data = json.dumps(record, ensure_ascii=False, indent=2) + "\n"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-
-    def _read_record(self, document_id: str) -> dict | None:
-        path = self._record_path(self._doc_dir(document_id))
-        if not path.is_file():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
 
     def create(self, stream: BinaryIO, *, filename: str, content_type: str | None,
                identity, access_scope: str, groups: list[str]) -> dict:
@@ -133,6 +115,14 @@ class DocumentUploadManager:
         suffix = Path(safe_name).suffix.lower()
         if not safe_name or suffix not in ALLOWED_SUFFIXES:
             raise UploadError("unsupported_type", "当前支持 .md、.markdown 和 .pdf 文档。")
+        if len(safe_name) > MAX_FILENAME_CHARS:
+            raise UploadError("filename_too_long", f"文件名不能超过 {MAX_FILENAME_CHARS} 个字符。")
+        normalized_content_type = content_type or "application/octet-stream"
+        if len(normalized_content_type) > MAX_CONTENT_TYPE_CHARS:
+            raise UploadError(
+                "content_type_too_long",
+                f"Content-Type 不能超过 {MAX_CONTENT_TYPE_CHARS} 个字符。",
+            )
 
         document_id = f"upload__{uuid.uuid4().hex}"
         job_id = f"job_{uuid.uuid4().hex}"
@@ -174,7 +164,7 @@ class DocumentUploadManager:
             "tenant": identity.tenant,
             "owner": identity.name,
             "filename": safe_name,
-            "content_type": content_type or "application/octet-stream",
+            "content_type": normalized_content_type,
             "source_format": "pdf" if suffix == ".pdf" else "markdown",
             "size": size,
             "sha256": digest.hexdigest(),
@@ -185,115 +175,114 @@ class DocumentUploadManager:
             "stage": "uploaded",
             "chunk_count": 0,
             "error_code": None,
+            "attempts": 0,
+            "max_attempts": self.max_attempts,
             "created_at": now,
             "updated_at": now,
             "source_path": str(source),
         }
-        with self._lock:
-            self._write_record(record)
-        return self.public_record(record)
+        try:
+            persisted = self.repository.create(record)
+        except Exception:
+            # 文件已经完整落盘但业务事务没有建立时，不能留下永远无人认领的孤儿目录。
+            shutil.rmtree(doc_dir, ignore_errors=True)
+            raise
+        return self.public_record(persisted)
 
     def _update(self, document_id: str, **changes) -> dict:
-        with self._lock:
-            record = self._read_record(document_id)
-            if record is None:
-                raise UploadError("not_found", "文档任务不存在。")
-            record.update(changes)
-            record["updated_at"] = _utcnow()
-            self._write_record(record)
-            return record
+        return self.repository.update_by_document(document_id, **changes)
 
-    def _get_embedder(self):
+    def _get_pipeline(self):
         with self._lock:
-            if self._embedder is None:
-                # 复用 Retriever 已有的 Store/Dense:嵌入式 Qdrant 不重复开客户端，
-                # local GPU 不重复加载模型，remote 也共用连接池与语义配置。
-                self._embedder = Embedder(self.retriever.cfg, store=self.retriever.store,
-                                          dense=self.retriever.dense)
-            return self._embedder
+            if self._pipeline is None:
+                self._pipeline = IngestionPipeline(
+                    self.root,
+                    self.retriever,
+                    mineru_client=self.mineru_client,
+                    # 保留 uploads.Embedder 这个替换点，兼容既有测试和调用方。
+                    embedder_factory=lambda *args, **kwargs: Embedder(*args, **kwargs),
+                )
+            return self._pipeline
 
-    def _claim(self, document_id: str) -> dict | None:
-        """原子领取 queued 任务；重复调度不会并发重复建库。"""
-        with self._lock:
-            record = self._read_record(document_id)
-            if record is None:
-                raise UploadError("not_found", "文档任务不存在。")
-            if record.get("status") != "queued":
-                return None
-            record.update(status="running", stage="parsing", error_code=None, updated_at=_utcnow())
-            self._write_record(record)
-            return record
+    def _claim_document(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
+        """本地兼容执行器按文档领取当前任务。"""
+        return self.repository.claim_by_document(document_id, worker_id=worker_id)
 
-    def process(self, document_id: str) -> None:
-        """BackgroundTasks 入口。失败转持久化 failed，不把内部异常暴露给客户端。"""
+    def _claim_job(self, job_id: str, *, worker_id: str | None = None) -> dict | None:
+        """队列执行器按消息中的 job_id 领取，不能跨任务边界。"""
+        return self.repository.claim_by_job(job_id, worker_id=worker_id)
+
+    def process(self, document_id: str, *, worker_id: str | None = None,
+                retry_on_transient: bool = False) -> dict | None:
+        """按文档执行当前任务；仅供无 Redis 的 BackgroundTasks 兼容模式使用。"""
+        record = self._claim_document(document_id, worker_id=worker_id)
+        if record is None:
+            current = self.repository.get_by_document(document_id)
+            return self.public_record(current) if current else None
+        return self._process_claimed(
+            record, worker_id=worker_id, retry_on_transient=retry_on_transient)
+
+    def process_job(self, job_id: str, *, worker_id: str | None = None,
+                    retry_on_transient: bool = False) -> dict | None:
+        """按 Celery 消息携带的 job_id 执行；领取前异常交给消息层重试。"""
+        record = self._claim_job(job_id, worker_id=worker_id)
+        if record is None:
+            current = self.repository.get_job(job_id)
+            return self.public_record(current) if current else None
+        return self._process_claimed(
+            record, worker_id=worker_id, retry_on_transient=retry_on_transient)
+
+    def _process_claimed(self, record: dict, *, worker_id: str | None,
+                         retry_on_transient: bool) -> dict | None:
+        """处理一条已经成功领取的任务，并负责持久化业务重试或终态。"""
+        document_id = record["document_id"]
+        job_id = record["job_id"]
         try:
-            record = self._claim(document_id)
-            if record is None:
-                return
-            source = Path(record["source_path"])
-            title = Path(record["filename"]).stem
-            parsed_dir = self._doc_dir(document_id) / "parsed"
-            parsed_dir.mkdir(parents=True, exist_ok=True)
-            layout = None
-            if record.get("source_format") == "pdf":
-                if self.mineru_client is None:
-                    raise MinerUError("mineru_unconfigured", "PDF 上传尚未配置 MinerU 客户端。")
-                self._update(document_id, stage="mineru_parsing")
-                parsed = self.mineru_client.parse_pdf(source, parsed_dir, data_id=document_id)
-                content = json.loads(parsed.content_list_path.read_text(encoding="utf-8"))
-                if parsed.layout_path:
-                    layout = json.loads(parsed.layout_path.read_text(encoding="utf-8"))
-                image_root = parsed.content_root
-                parser_batch_id = parsed.batch_id
-            else:
-                try:
-                    markdown = source.read_text(encoding="utf-8")
-                except UnicodeDecodeError as exc:
-                    raise UploadError("invalid_encoding", "Markdown 必须是 UTF-8 编码。") from exc
-                content = markdown_to_content_list(markdown, title=title, source_url="")
-                (parsed_dir / f"{document_id}_content_list.json").write_text(
-                    json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                image_root = parsed_dir
-                parser_batch_id = None
-            metadata = {
-                "doc_id": document_id,
-                "title": title,
-                "source_format": record["source_format"],
-                "content_sha256": record["sha256"],
-                "original_filename": record["filename"],
-            }
-            (parsed_dir / "metadata.json").write_text(
-                json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-            self._update(document_id, stage="chunking", parser_batch_id=parser_batch_id)
-            elements = from_mineru(content, layout)
-            sample = "".join((element.text or "") for element in elements[:40])[:2000]
-            result = Chunker().chunk(elements, doc_id=document_id, doc_type="technical_document",
-                                     lang="ch" if any("\u4e00" <= c <= "\u9fff" for c in sample) else "en",
-                                     doc_meta=metadata, acl=record["acl"])
-            self._update(document_id, stage="embedding")
-            stats = self._get_embedder().index_document(
-                document_id, elements, result, image_root=str(image_root))
+            stats = self._get_pipeline().run(
+                record, lambda **changes: self._update(
+                    document_id, expected_worker_id=worker_id, **changes))
             self._update(document_id, status="ready", stage="ready",
-                         chunk_count=int(stats.get("indexed", len(result.chunks))))
+                         chunk_count=stats["chunk_count"],
+                         parser_batch_id=stats.get("parser_batch_id"),
+                         expected_worker_id=worker_id)
         except Exception as exc:
             code = exc.code if isinstance(exc, (UploadError, MinerUError)) else "index_failed"
+            if code == "lease_lost":
+                log.warning("upload lease lost: doc=%s worker=%s", document_id, worker_id)
+                current = self.repository.get_job(job_id)
+                return self.public_record(current) if current else None
             log.exception("upload processing failed: doc=%s code=%s", document_id, code)
             try:
-                self._update(document_id, status="failed", stage="failed", error_code=code)
+                current = self.repository.get_job(job_id)
+                if (retry_on_transient and current and
+                        is_transient_ingestion_error(exc) and
+                        hasattr(self.repository, "schedule_retry")):
+                    delay = retry_delay_seconds(current.get("attempts", 1), current["job_id"])
+                    self.repository.schedule_retry(
+                        document_id, error_code=code, delay_seconds=delay,
+                        expected_worker_id=worker_id)
+                    log.warning(
+                        "upload retry scheduled: doc=%s job=%s attempt=%s delay=%ss code=%s",
+                        document_id, current["job_id"], current.get("attempts"), delay, code)
+                else:
+                    self._update(
+                        document_id, status="failed", stage="failed", error_code=code,
+                        expected_worker_id=worker_id)
             except Exception:
                 log.exception("upload failure state could not be persisted: doc=%s", document_id)
+        current = self.repository.get_job(job_id)
+        return self.public_record(current) if current else None
 
     def get_job(self, job_id: str) -> dict | None:
-        # 第一版是文件记录，规模小;后续 PostgreSQL 换成索引查询。
-        for path in self.root.glob("upload__*/record.json"):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if record.get("job_id") == job_id:
-                return self.public_record(record)
-        return None
+        record = self.repository.get_job(job_id)
+        return self.public_record(record) if record else None
+
+    def retry_job(self, job_id: str) -> dict:
+        """为失败文档创建一条新任务，保留数据库中的旧任务历史。"""
+        new_job_id = f"job_{uuid.uuid4().hex}"
+        record = self.repository.retry_failed(
+            job_id, new_job_id=new_job_id, max_attempts=self.max_attempts)
+        return self.public_record(record)
 
     @staticmethod
     def public_record(record: dict) -> dict:
@@ -301,4 +290,5 @@ class DocumentUploadManager:
             "document_id", "job_id", "tenant", "owner", "filename", "size", "sha256",
             "source_format", "access_scope", "groups", "status", "stage", "chunk_count",
             "parser_batch_id", "error_code",
-            "created_at", "updated_at")}
+            "job_status", "attempts", "max_attempts", "worker_id", "celery_task_id",
+            "created_at", "updated_at", "started_at", "heartbeat_at", "finished_at")}

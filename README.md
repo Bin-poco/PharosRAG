@@ -67,14 +67,17 @@ One thing worth stating plainly: **the throughput ceiling is the forward speed o
 
 ## Getting started
 
-> Apple Silicon Mac 没有 NVIDIA GPU？使用 [Mac Docker + 在线模型开发指南](docs/MAC_DOCKER_DEV.md)，保留完整 FastAPI/Qdrant/Agentic RAG 链路，只把 CUDA 推理替换为阿里云百炼。准备把它做成自己的简历项目时，按 [五阶段改造路线](docs/PROJECT_ROADMAP.md) 推进。
+> Apple Silicon Mac 没有 NVIDIA GPU？使用 [Mac Docker + 在线模型开发指南](docs/MAC_DOCKER_DEV.md)，保留完整 FastAPI/Qdrant/Agentic RAG 链路，只把 CUDA 推理替换为阿里云百炼。后续迭代方向见 [项目路线图](docs/ROADMAP.md)。
 
 The service runs under systemd — starts at boot, restarts on failure. Day to day, a team member needs their own API key and then:
 
 The Mac development profile also exposes an authenticated Markdown/PDF upload endpoint (`POST /v1/documents`).
 Markdown is normalized locally; PDF uses MinerU's precision API before entering the same chunk/embed/index pipeline:
 the server derives tenant/owner ACL from the API key, indexes in the background, and exposes progress at
-`GET /v1/jobs/{job_id}`. See [the API guide](docs/API.md#post-v1documents--上传并建库keys-模式).
+`GET /v1/jobs/{job_id}`. PostgreSQL, Redis and Celery provide durable state, delayed retry, Worker heartbeat and
+stale-job recovery; failed jobs can be restarted without losing their history. See
+[the API guide](docs/API.md#post-v1documents--上传并建库keys-模式) and
+[the reliable-job design](docs/RELIABLE_UPLOAD_JOBS.md).
 
 ```bash
 conda activate pharos

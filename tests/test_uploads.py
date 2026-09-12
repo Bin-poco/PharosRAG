@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from _fakes import FakeRetriever, make_app, make_cfg
 from pharos.identity import Identity
+from pharos.jobs import SQLJobRepository
 from pharos.mineru import MinerUResult
 from pharos.uploads import DocumentUploadManager, UploadError, build_upload_acl
 
@@ -94,6 +95,24 @@ def test_upload_manager_rejects_unsupported_empty_and_oversize(tmp_path):
     assert exc.value.code == "invalid_pdf"
 
 
+def test_upload_manager_rejects_metadata_that_exceeds_database_limits(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+
+    with pytest.raises(UploadError) as exc:
+        manager.create(
+            io.BytesIO(b"# Guide"), filename=f"{'a' * 510}.md", content_type="text/markdown",
+            identity=UPLOADER, access_scope="private", groups=[])
+    assert exc.value.code == "filename_too_long"
+
+    with pytest.raises(UploadError) as exc:
+        manager.create(
+            io.BytesIO(b"# Guide"), filename="guide.md", content_type="x" * 161,
+            identity=UPLOADER, access_scope="private", groups=[])
+    assert exc.value.code == "content_type_too_long"
+
+    assert not list((tmp_path / "uploads").glob("upload__*"))
+
+
 def test_upload_manager_parses_pdf_with_mineru_then_indexes(tmp_path, monkeypatch):
     import pharos.uploads as U
 
@@ -152,6 +171,28 @@ def test_pdf_upload_is_rejected_before_queue_when_mineru_is_unconfigured(tmp_pat
     assert not list((tmp_path / "uploads").glob("upload__*"))
 
 
+def test_transient_pipeline_failure_is_scheduled_for_retry(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    manager = DocumentUploadManager(
+        str(tmp_path / "uploads"), SimpleNamespace(), repository=repository, max_attempts=3)
+    record = manager.create(
+        io.BytesIO(b"# Retry"), filename="retry.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[])
+
+    class FailingPipeline:
+        def run(self, record, update_stage):
+            raise ConnectionError("temporary inference outage")
+
+    manager._pipeline = FailingPipeline()
+    result = manager.process_job(
+        record["job_id"], worker_id="worker-a", retry_on_transient=True)
+
+    assert result["job_status"] == "retrying"
+    assert result["status"] == "queued"
+    assert result["stage"] == "waiting_retry"
+    assert result["attempts"] == 1
+
+
 class FakeUploadManager:
     def __init__(self):
         self.records = {}
@@ -174,6 +215,15 @@ class FakeUploadManager:
         record = self.records.get(job_id)
         return {k: v for k, v in record.items() if k != "acl"} if record else None
 
+    def retry_job(self, job_id):
+        record = dict(self.records[job_id])
+        if record.get("job_status", record["status"]) != "failed":
+            raise UploadError("job_not_retryable", "只有失败任务可以手动重试。")
+        record.update(job_id="job_2", status="queued", job_status="queued",
+                      stage="uploaded", attempts=0, error_code=None)
+        self.records["job_2"] = record
+        return {k: v for k, v in record.items() if k != "acl"}
+
 
 def test_upload_http_requires_role_and_job_is_owner_scoped():
     uploader = Identity(name="alice", tenant="t1", principals=["g_eng"], roles=["uploader"])
@@ -194,6 +244,57 @@ def test_upload_http_requires_role_and_job_is_owner_scoped():
         assert job.status_code == 200 and job.json()["status"] == "ok"
         assert job.json()["document_status"] == "queued"
         assert client.get("/v1/jobs/job_1", headers={"X-API-Key": "b" * 20}).status_code == 404
+
+
+def test_upload_http_dispatches_to_queue_when_dispatcher_is_configured():
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+    manager = FakeUploadManager()
+
+    class FakeDispatcher:
+        jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    dispatcher = FakeDispatcher()
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader},
+                   task_dispatcher=dispatcher)
+    app.state.upload_manager = manager
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/documents", headers={"X-API-Key": "a" * 20},
+            files={"file": ("guide.md", b"# Guide", "text/markdown")})
+
+    assert response.status_code == 202
+    assert dispatcher.jobs == ["job_1"]
+    assert manager.processed == []
+
+
+def test_failed_upload_can_be_manually_retried_as_a_new_job():
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+    manager = FakeUploadManager()
+    manager.create(io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+                   identity=uploader, access_scope="private", groups=[])
+    manager.records["job_1"].update(status="failed", job_status="failed", stage="failed")
+
+    class FakeDispatcher:
+        jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    dispatcher = FakeDispatcher()
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader},
+                   task_dispatcher=dispatcher)
+    app.state.upload_manager = manager
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/job_1/retry", headers={"X-API-Key": "a" * 20})
+
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "job_2"
+    assert response.json()["previous_job_id"] == "job_1"
+    assert dispatcher.jobs == ["job_2"]
 
 
 def test_upload_http_reader_is_forbidden():
@@ -220,3 +321,25 @@ def test_upload_http_pdf_reports_missing_mineru_before_accepting(tmp_path, monke
             files={"file": ("manual.pdf", b"%PDF-1.7\nfixture", "application/pdf")})
     assert response.status_code == 503
     assert response.json()["status"] == "mineru_unconfigured"
+
+
+def test_upload_http_maps_transient_persistence_failure_to_retriable_503():
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+
+    class UnavailableUploadManager(FakeUploadManager):
+        def create(self, stream, *, filename, content_type, identity, access_scope, groups):
+            raise ConnectionError("database temporarily unavailable")
+
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader})
+    app.state.upload_manager = UnavailableUploadManager()
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/documents", headers={"X-API-Key": "a" * 20},
+            files={"file": ("guide.md", b"# Guide", "text/markdown")})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "backend_unavailable",
+        "retriable": True,
+        "hint": "上传任务暂时无法保存，请稍后重试。",
+    }

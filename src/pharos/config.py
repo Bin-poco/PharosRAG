@@ -97,6 +97,16 @@ class PharosConfig:
     corpus_dir: str = ""         # 入库语料目录(MinerU 解析产物;留仓外,PHAROS_CORPUS_DIR)
     upload_dir: str = ""         # 用户上传原文+标准化产物(留仓外,PHAROS_UPLOAD_DIR)
     max_upload_bytes: int = 10 * 1024 * 1024
+    database_url: str = ""       # 文档/任务状态库；空时保留 JSON 本地兼容模式
+    job_max_attempts: int = 3
+    redis_url: str = ""          # Celery broker；非空时上传不再使用进程内 BackgroundTasks
+    job_heartbeat_seconds: int = 15
+    job_stale_seconds: int = 120
+    job_publish_stale_seconds: int = 60
+    job_dispatch_stale_seconds: int = 3600
+    job_visibility_timeout: int = 3600
+    job_soft_time_limit: int = 2100
+    job_time_limit: int = 2400
     # 用户上传 PDF 的在线 MinerU 精准解析。token 只按环境变量名读取，不写进任务记录。
     mineru_base_url: str = "https://mineru.net"
     mineru_token_env: str = "MINERU_TOKEN_A"
@@ -156,6 +166,16 @@ def from_env() -> PharosConfig:
         upload_dir=os.path.expanduser(os.environ.get("PHAROS_UPLOAD_DIR", "").strip())
                    or os.path.join(index_dir, "uploads"),
         max_upload_bytes=_int_env("PHAROS_MAX_UPLOAD_BYTES", 10 * 1024 * 1024),
+        database_url=os.environ.get("PHAROS_DATABASE_URL", "").strip(),
+        job_max_attempts=_int_env("PHAROS_JOB_MAX_ATTEMPTS", 3),
+        redis_url=os.environ.get("PHAROS_REDIS_URL", "").strip(),
+        job_heartbeat_seconds=_int_env("PHAROS_JOB_HEARTBEAT_SECONDS", 15),
+        job_stale_seconds=_int_env("PHAROS_JOB_STALE_SECONDS", 120),
+        job_publish_stale_seconds=_int_env("PHAROS_JOB_PUBLISH_STALE_SECONDS", 60),
+        job_dispatch_stale_seconds=_int_env("PHAROS_JOB_DISPATCH_STALE_SECONDS", 3600),
+        job_visibility_timeout=_int_env("PHAROS_JOB_VISIBILITY_TIMEOUT", 3600),
+        job_soft_time_limit=_int_env("PHAROS_JOB_SOFT_TIME_LIMIT", 2100),
+        job_time_limit=_int_env("PHAROS_JOB_TIME_LIMIT", 2400),
         mineru_base_url=os.environ.get("PHAROS_MINERU_BASE_URL", "https://mineru.net").strip(),
         mineru_token_env=os.environ.get("PHAROS_MINERU_TOKEN_ENV", "MINERU_TOKEN_A").strip(),
         mineru_model_version=os.environ.get("PHAROS_MINERU_MODEL_VERSION", "vlm").strip(),

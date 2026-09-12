@@ -71,6 +71,8 @@ def make_cfg(**kw):
     return pconfig.PharosConfig(**kw)
 
 
-def make_app(retriever=None, user=None, cfg=None, generator_factory=None, keys=None):
+def make_app(retriever=None, user=None, cfg=None, generator_factory=None, keys=None,
+             task_dispatcher=None):
     return create_app(cfg=cfg or make_cfg(), retriever=retriever or FakeRetriever(),
-                      user=user or make_user(), generator_factory=generator_factory, keys=keys)
+                      user=user or make_user(), generator_factory=generator_factory, keys=keys,
+                      task_dispatcher=task_dispatcher)

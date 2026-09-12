@@ -30,7 +30,8 @@ from pydantic import BaseModel
 from . import __version__, config, engine, identity as identity_mod, smart, toolcore
 from .obs import RequestLog, Stats
 from .sessions import SessionRegistry
-from .mineru import MinerUClient
+from .ingestion import build_mineru_client, is_transient_ingestion_error
+from .jobs import CeleryJobDispatcher, SQLJobRepository
 from .uploads import DocumentUploadManager, UploadError, personal_principal
 from embedder import User
 from generator import DEFAULT_TABLE_LEG, looks_numeric
@@ -81,9 +82,12 @@ class GroupedReq(BaseModel):
 
 
 def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None,
-               generator_factory=None, keys=None, upload_manager=None) -> FastAPI:
+               generator_factory=None, keys=None, upload_manager=None,
+               task_dispatcher=None) -> FastAPI:
     """app 工厂。生产:全默认(从 env 建配置,启动时打开真索引)。测试:注入 fake retriever/user/generator/keys。"""
     cfg = cfg or config.from_env()
+    if cfg.redis_url and not cfg.database_url:
+        raise SystemExit("配置 PHAROS_REDIS_URL 时必须同时配置 PHAROS_DATABASE_URL。")
     # toolcore 的交付预算读环境变量;此处把 Pharos 配置兑现到产品命名空间(cfg 为单一真源)
     os.environ["PHAROS_MAX_CONTEXT_TOKENS"] = str(cfg.max_context_tokens)
     tc = toolcore
@@ -128,6 +132,8 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
     state.reqlog = RequestLog(cfg.log_dir, log_queries=cfg.log_queries)
     state.upload_manager = upload_manager
     state.upload_manager_lock = threading.Lock()
+    state.task_dispatcher = task_dispatcher
+    state.task_dispatcher_lock = threading.Lock()
 
     def _current_user(request: Request):
         """本次请求的引擎 User。keys 模式按解析出的身份现建(多身份核心);legacy/open 用启动绑定的。"""
@@ -147,26 +153,22 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                     # 明确的数据目录，不能让空字符串 resolve 成当前代码目录。
                     upload_root = cfg.upload_dir or os.path.join(
                         cfg.index_dir or os.path.expanduser("~/rag_real"), "uploads")
-                    token_names = list(dict.fromkeys([
-                        cfg.mineru_token_env, "MINERU_TOKEN", "MINERU_TOKEN_A",
-                        "MINERU_TOKEN_B", "MINERU_TOKEN_C",
-                    ]))
-                    mineru_token = next(
-                        (os.environ.get(name, "").strip() for name in token_names
-                         if name and os.environ.get(name, "").strip()), "")
-                    mineru = MinerUClient(
-                        token=mineru_token,
-                        base_url=cfg.mineru_base_url,
-                        model_version=cfg.mineru_model_version,
-                        language=cfg.mineru_language,
-                        poll_seconds=cfg.mineru_poll_seconds,
-                        timeout_seconds=cfg.mineru_timeout_seconds,
-                        max_archive_bytes=cfg.mineru_max_archive_bytes,
-                    )
+                    repository = (SQLJobRepository(cfg.database_url)
+                                  if cfg.database_url else None)
                     state.upload_manager = DocumentUploadManager(
                         upload_root, state.retriever, max_bytes=cfg.max_upload_bytes,
-                        mineru_client=mineru)
+                        mineru_client=build_mineru_client(cfg), repository=repository,
+                        max_attempts=cfg.job_max_attempts)
         return state.upload_manager
+
+    def _get_task_dispatcher():
+        if state.task_dispatcher is None and cfg.redis_url:
+            with state.task_dispatcher_lock:
+                if state.task_dispatcher is None:
+                    from .worker.celery_app import app as celery_app
+                    state.task_dispatcher = CeleryJobDispatcher(
+                        _get_upload_manager().repository, celery_app)
+        return state.task_dispatcher
 
     def _iden_name(request: Request) -> str:
         iden = getattr(request.state, "identity", None)
@@ -325,7 +327,7 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                         file: UploadFile = File(...),
                         access_scope: str = Form("private"),
                         groups: str = Form("")):
-        """上传 Markdown 并在响应后建库。tenant/owner 只取 X-API-Key 身份，不读表单。"""
+        """上传 Markdown/PDF 并异步建库。tenant/owner 只取 X-API-Key 身份。"""
         iden = getattr(request.state, "identity", None)
         if mode != "keys" or iden is None:
             return JSONResponse({"status": "forbidden", "retriable": False,
@@ -343,9 +345,30 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                     503 if exc.code == "mineru_unconfigured" else 400)
             return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
                                 status_code=status_code)
-        background_tasks.add_task(_get_upload_manager().process, record["document_id"])
+        except Exception as exc:
+            if not is_transient_ingestion_error(exc):
+                raise
+            log.warning("upload persistence temporarily unavailable", exc_info=True)
+            return JSONResponse(
+                {"status": "backend_unavailable", "retriable": True,
+                 "hint": "上传任务暂时无法保存，请稍后重试。"},
+                status_code=503,
+            )
+        dispatcher = _get_task_dispatcher()
+        dispatch_delayed = False
+        if dispatcher is not None:
+            try:
+                dispatcher.dispatch(record["job_id"])
+            except Exception:
+                # 任务和 Outbox 已在同一数据库事务提交；broker 恢复后 scheduler 会补投。
+                dispatch_delayed = True
+                log.warning("ingestion dispatch delayed: job=%s", record["job_id"], exc_info=True)
+        else:
+            # 没配置 Redis 的单机兼容模式，保留原有行为，便于纯本地测试和渐进迁移。
+            background_tasks.add_task(_get_upload_manager().process, record["document_id"])
         # status 是 HTTP 业务状态，document_status 是异步文档状态，不能同键互盖。
-        out = {**record, "document_status": record.get("status"), "status": "accepted"}
+        out = {**record, "document_status": record.get("status"), "status": "accepted",
+               "dispatch_delayed": dispatch_delayed}
         request.state.log_extra = {"status": "ok", "document_id": record["document_id"],
                                    "job_id": record["job_id"]}
         return JSONResponse(out, status_code=202)
@@ -363,6 +386,42 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
             return JSONResponse({"status": "not_found"}, status_code=404)
         out = {**record, "document_status": record.get("status"), "status": "ok"}
         return _log(request, out)
+
+    @app.post("/v1/jobs/{job_id}/retry", status_code=202)
+    def retry_upload_job(job_id: str, request: Request,
+                         background_tasks: BackgroundTasks):
+        """上传者或同 tenant 管理员可让当前失败文档创建一条新的摄取任务。"""
+        iden = getattr(request.state, "identity", None)
+        if mode != "keys" or iden is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        manager = _get_upload_manager()
+        current = manager.get_job(job_id)
+        if not current or current.get("tenant") != iden.tenant:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        if current.get("owner") != iden.name and not iden.admin:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        try:
+            record = manager.retry_job(job_id)
+        except UploadError as exc:
+            status_code = 409 if exc.code == "job_not_retryable" else 404
+            return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
+                                status_code=status_code)
+        dispatcher = _get_task_dispatcher()
+        dispatch_delayed = False
+        if dispatcher is not None:
+            try:
+                dispatcher.dispatch(record["job_id"])
+            except Exception:
+                dispatch_delayed = True
+                log.warning("ingestion retry dispatch delayed: job=%s", record["job_id"],
+                            exc_info=True)
+        else:
+            background_tasks.add_task(manager.process, record["document_id"])
+        out = {**record, "document_status": record.get("status"), "status": "accepted",
+               "previous_job_id": job_id, "dispatch_delayed": dispatch_delayed}
+        request.state.log_extra = {"status": "ok", "document_id": record["document_id"],
+                                   "job_id": record["job_id"]}
+        return JSONResponse(out, status_code=202)
 
     @app.get("/v1/documents/{doc_id}")
     def get_document(doc_id: str, request: Request, max_tokens: int = 6000):
