@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 import anyio
 from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import __version__, config, engine, identity as identity_mod, smart, toolcore
 from .obs import RequestLog, Stats
@@ -79,6 +79,11 @@ class GroupedReq(BaseModel):
     doc_ids: list[str] = []
     top_k: int = 3
     rerank: bool = False
+
+
+class AccessUpdateReq(BaseModel):
+    access_scope: str = "private"
+    groups: list[str] = Field(default_factory=list)
 
 
 def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None,
@@ -169,6 +174,44 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                     state.task_dispatcher = CeleryJobDispatcher(
                         _get_upload_manager().repository, celery_app)
         return state.task_dispatcher
+
+    def _dispatch_ingestion(record: dict, background_tasks: BackgroundTasks,
+                            *, action: str) -> bool:
+        """投递摄取任务；返回是否因 broker 故障而等待 Outbox 补投。"""
+        dispatcher = _get_task_dispatcher()
+        if dispatcher is not None:
+            try:
+                dispatcher.dispatch(record["job_id"])
+                return False
+            except Exception:
+                log.warning("%s dispatch delayed: job=%s", action, record["job_id"],
+                            exc_info=True)
+                return True
+        background_tasks.add_task(_get_upload_manager().process, record["document_id"])
+        return False
+
+    def _managed_document(request: Request, document_id: str) -> dict | None:
+        """管理面按 tenant + owner 授权；无权与不存在统一返回 None。"""
+        iden = getattr(request.state, "identity", None)
+        if mode != "keys" or iden is None:
+            return None
+        record = _get_upload_manager().get_document(document_id)
+        if not record or record.get("tenant") != iden.tenant:
+            return None
+        if record.get("owner") != iden.name and not iden.admin:
+            return None
+        return record
+
+    def _lifecycle_upload_error(exc: UploadError) -> JSONResponse:
+        status_code = 404 if exc.code == "not_found" else (
+            403 if exc.code in {
+                "upload_forbidden", "group_forbidden", "tenant_publish_forbidden"
+            } else 409 if exc.code in {
+                "document_busy", "document_deleted", "lifecycle_conflict"
+            } else 400)
+        return JSONResponse(
+            {"status": exc.code, "retriable": False, "hint": str(exc)},
+            status_code=status_code)
 
     def _iden_name(request: Request) -> str:
         iden = getattr(request.state, "identity", None)
@@ -354,18 +397,9 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                  "hint": "上传任务暂时无法保存，请稍后重试。"},
                 status_code=503,
             )
-        dispatcher = _get_task_dispatcher()
-        dispatch_delayed = False
-        if dispatcher is not None:
-            try:
-                dispatcher.dispatch(record["job_id"])
-            except Exception:
-                # 任务和 Outbox 已在同一数据库事务提交；broker 恢复后 scheduler 会补投。
-                dispatch_delayed = True
-                log.warning("ingestion dispatch delayed: job=%s", record["job_id"], exc_info=True)
-        else:
-            # 没配置 Redis 的单机兼容模式，保留原有行为，便于纯本地测试和渐进迁移。
-            background_tasks.add_task(_get_upload_manager().process, record["document_id"])
+        # 任务和 Outbox 已在同一数据库事务提交；broker 故障时 scheduler 会补投。
+        dispatch_delayed = _dispatch_ingestion(
+            record, background_tasks, action="ingestion")
         # status 是 HTTP 业务状态，document_status 是异步文档状态，不能同键互盖。
         out = {**record, "document_status": record.get("status"), "status": "accepted",
                "dispatch_delayed": dispatch_delayed}
@@ -406,22 +440,94 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
             status_code = 409 if exc.code == "job_not_retryable" else 404
             return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
                                 status_code=status_code)
-        dispatcher = _get_task_dispatcher()
-        dispatch_delayed = False
-        if dispatcher is not None:
-            try:
-                dispatcher.dispatch(record["job_id"])
-            except Exception:
-                dispatch_delayed = True
-                log.warning("ingestion retry dispatch delayed: job=%s", record["job_id"],
-                            exc_info=True)
-        else:
-            background_tasks.add_task(manager.process, record["document_id"])
+        dispatch_delayed = _dispatch_ingestion(
+            record, background_tasks, action="ingestion retry")
         out = {**record, "document_status": record.get("status"), "status": "accepted",
                "previous_job_id": job_id, "dispatch_delayed": dispatch_delayed}
         request.state.log_extra = {"status": "ok", "document_id": record["document_id"],
                                    "job_id": record["job_id"]}
         return JSONResponse(out, status_code=202)
+
+    # ---------- 上传文档管理面（数据库是真相源；与上面的检索库存分离） ----------
+    @app.get("/v1/uploads")
+    def list_uploads(request: Request, include_deleted: bool = False,
+                     limit: int = 100, offset: int = 0):
+        iden = getattr(request.state, "identity", None)
+        if mode != "keys" or iden is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        records = _get_upload_manager().list_documents(
+            tenant=iden.tenant, owner=None if iden.admin else iden.name,
+            include_deleted=include_deleted, limit=limit, offset=offset)
+        return _log(request, {
+            "status": "ok", "documents": records, "returned_n": len(records),
+            "limit": max(1, min(int(limit), 500)), "offset": max(0, int(offset)),
+        })
+
+    @app.post("/v1/documents/{document_id}/reindex", status_code=202)
+    def reindex_document(document_id: str, request: Request,
+                         background_tasks: BackgroundTasks):
+        if _managed_document(request, document_id) is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        manager = _get_upload_manager()
+        try:
+            record = manager.reindex_document(document_id)
+        except UploadError as exc:
+            return _lifecycle_upload_error(exc)
+        dispatch_delayed = _dispatch_ingestion(
+            record, background_tasks, action="document reindex")
+        out = {**record, "document_status": record.get("status"),
+               "status": "accepted", "dispatch_delayed": dispatch_delayed}
+        request.state.log_extra = {
+            "status": "ok", "document_id": document_id, "job_id": record["job_id"]}
+        return JSONResponse(out, status_code=202)
+
+    @app.patch("/v1/documents/{document_id}/access", status_code=202)
+    def update_document_access(document_id: str, q: AccessUpdateReq, request: Request,
+                               background_tasks: BackgroundTasks):
+        if _managed_document(request, document_id) is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        iden = request.state.identity
+        manager = _get_upload_manager()
+        try:
+            record = manager.update_access(
+                document_id, identity=iden, access_scope=q.access_scope, groups=q.groups)
+        except UploadError as exc:
+            return _lifecycle_upload_error(exc)
+        except Exception as exc:
+            if not is_transient_ingestion_error(exc):
+                raise
+            log.warning("document access update temporarily unavailable: doc=%s",
+                        document_id, exc_info=True)
+            return JSONResponse(
+                {"status": "backend_unavailable", "retriable": True,
+                 "hint": "旧索引下线或新权限任务创建失败，请稍后重试。"},
+                status_code=503)
+        dispatch_delayed = _dispatch_ingestion(
+            record, background_tasks, action="document access update")
+        out = {**record, "document_status": record.get("status"),
+               "status": "accepted", "dispatch_delayed": dispatch_delayed}
+        request.state.log_extra = {
+            "status": "ok", "document_id": document_id, "job_id": record["job_id"]}
+        return JSONResponse(out, status_code=202)
+
+    @app.delete("/v1/documents/{document_id}")
+    def delete_managed_document(document_id: str, request: Request):
+        if _managed_document(request, document_id) is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        try:
+            record = _get_upload_manager().delete_document(document_id)
+        except UploadError as exc:
+            return _lifecycle_upload_error(exc)
+        except Exception as exc:
+            if not is_transient_ingestion_error(exc):
+                raise
+            log.warning("document deletion temporarily unavailable: doc=%s",
+                        document_id, exc_info=True)
+            return JSONResponse(
+                {"status": "backend_unavailable", "retriable": True,
+                 "hint": "文档清理尚未完成，请重试删除。"}, status_code=503)
+        out = {**record, "document_status": record.get("status"), "status": "ok"}
+        return _log(request, out, document_id=document_id)
 
     @app.get("/v1/documents/{doc_id}")
     def get_document(doc_id: str, request: Request, max_tokens: int = 6000):

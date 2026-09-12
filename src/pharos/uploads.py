@@ -42,7 +42,8 @@ def can_upload(identity) -> bool:
                 (identity.admin or "uploader" in set(identity.roles or [])))
 
 
-def build_upload_acl(identity, access_scope: str, groups: list[str]) -> dict:
+def build_upload_acl(identity, access_scope: str, groups: list[str], *,
+                     owner: str | None = None) -> dict:
     """产品层三种范围 -> 引擎层既有 ACL。tenant 永远取认证身份。"""
     if not can_upload(identity):
         raise UploadError("upload_forbidden", "当前身份没有 uploader 或 admin 权限。")
@@ -62,7 +63,8 @@ def build_upload_acl(identity, access_scope: str, groups: list[str]) -> dict:
     if scope == "tenant" and not identity.admin:
         raise UploadError("tenant_publish_forbidden", "只有 admin 可以发布 tenant 内公开文档。")
 
-    allow = [] if scope == "tenant" else [personal_principal(identity), *requested]
+    owner_principal = f"user:{owner or identity.name}"
+    allow = [] if scope == "tenant" else [owner_principal, *requested]
     return {
         "tenant": identity.tenant,
         "allow": list(dict.fromkeys(allow)),
@@ -282,6 +284,91 @@ class DocumentUploadManager:
         new_job_id = f"job_{uuid.uuid4().hex}"
         record = self.repository.retry_failed(
             job_id, new_job_id=new_job_id, max_attempts=self.max_attempts)
+        return self.public_record(record)
+
+    def get_document(self, document_id: str) -> dict | None:
+        record = self.repository.get_by_document(document_id)
+        return self.public_record(record) if record else None
+
+    def list_documents(self, *, tenant: str, owner: str | None = None,
+                       include_deleted: bool = False, limit: int = 100,
+                       offset: int = 0) -> list[dict]:
+        records = self.repository.list_documents(
+            tenant=tenant, owner=owner, include_deleted=include_deleted,
+            limit=limit, offset=offset)
+        return [self.public_record(record) for record in records]
+
+    def reindex_document(self, document_id: str, *, access_scope: str | None = None,
+                         groups: list[str] | None = None, acl: dict | None = None) -> dict:
+        """从保留的原文件创建新摄取任务；旧任务历史由 SQL 仓储保留。"""
+        new_job_id = f"job_{uuid.uuid4().hex}"
+        record = self.repository.enqueue_reindex(
+            document_id, new_job_id=new_job_id, max_attempts=self.max_attempts,
+            access_scope=access_scope, groups=groups, acl=acl)
+        return self.public_record(record)
+
+    def update_access(self, document_id: str, *, identity,
+                      access_scope: str, groups: list[str]) -> dict:
+        """收紧或扩展 ACL，并重建向量 payload。
+
+        旧索引必须先下线，避免数据库已显示新权限、Qdrant 却仍按旧权限提供结果。
+        删除成功后才原子更新 ACL + 创建新任务；若建任务失败，文档至多暂时不可检索，
+        不会继续以旧的、更宽权限暴露（fail closed）。
+        """
+        scope = (access_scope or "private").strip().lower()
+        normalized_groups = list(dict.fromkeys(
+            group.strip() for group in groups if group and group.strip()))
+        current = self.repository.get_by_document(document_id)
+        if current is None:
+            raise UploadError("not_found", "文档不存在。")
+        acl = build_upload_acl(
+            identity, scope, normalized_groups, owner=current["owner"])
+        job_id = f"job_{uuid.uuid4().hex}"
+        self.repository.prepare_access_update(
+            document_id, new_job_id=job_id, max_attempts=self.max_attempts)
+        try:
+            self._get_pipeline().delete_index(document_id)
+            record = self.repository.activate_access_update(
+                document_id, job_id=job_id, access_scope=scope,
+                groups=normalized_groups, acl=acl)
+        except Exception as exc:
+            code = getattr(exc, "code", None) or "access_update_failed"
+            try:
+                self.repository.fail_access_update(
+                    document_id, job_id=job_id, error_code=code)
+            except Exception:
+                log.exception(
+                    "access update failure state could not be persisted: doc=%s",
+                    document_id)
+            raise
+        return self.public_record(record)
+
+    def delete_document(self, document_id: str) -> dict:
+        """软删除管理记录，物理删除索引、sidecar 与本地原文。操作可安全重试。"""
+        record = self.repository.begin_delete(document_id)
+        if record.get("status") == "deleted":
+            return self.public_record(record)
+        try:
+            self._get_pipeline().delete_index(document_id)
+            doc_dir = self._doc_dir(document_id)
+            if isinstance(self.repository, FileJobRepository):
+                # JSON 兼容仓储把 record.json 放在文档目录内；保留它才能维持软删除审计。
+                for child in doc_dir.iterdir() if doc_dir.exists() else ():
+                    if child.name == "record.json":
+                        continue
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+            elif doc_dir.exists():
+                shutil.rmtree(doc_dir)
+            record = self.repository.finish_delete(document_id)
+        except Exception:
+            try:
+                self.repository.fail_delete(document_id)
+            except Exception:
+                log.exception("delete failure state could not be persisted: doc=%s", document_id)
+            raise
         return self.public_record(record)
 
     @staticmethod
