@@ -19,6 +19,7 @@
 
 | 脚本 | 干什么 | 依赖 |
 |---|---|---|
+| `service_smoke.py` | 对已启动的生产 `/v1/ask` 跑官方语料冒烟矩阵，检查路由、预算、引用来源、截断与拒答 | HTTP 服务 + 在线 LLM |
 | `gen_gold.py` | **7.0(快速版)** 从 demo 索引采样 chunk,DeepSeek 据每段生成 (问题, golden 答案) → `gold.jsonl` | CPU + DeepSeek |
 | `run_eval.py` | **7.A/7.B** 跑系统出四指标；默认对比当前生产 `single/agent/auto`，也能复现历史 agentic/decompose 基线 | GPU + DeepSeek |
 | `acl_regression.py` | **7.C** 自建 2 租户合成库,断言跨租户/无权/unset 身份对受限内容 **0 召回** | GPU |
@@ -28,6 +29,25 @@
 | `aggregate.py` | 合并程序化指标 + Claude verdicts,按 hop 拆 + 双层归因 | CPU |
 
 > 去偏全流程见下方「去偏全流程」节(gold 与裁判都用 Claude 子 agent,DeepSeek 只当被测系统)。
+
+## 官方语料生产冒烟
+
+`official_agent_smoke.json` 是面向当前 37 篇固定版本官方语料的线上检查集，共 10 条，覆盖
+FastAPI、Docker、Qdrant、Celery、direct/agent/auto 路由、跨文档综合和无证据拒答。它不逐字比较
+模型答案，而验证更稳定的生产契约：HTTP 状态、路由结果、Agent 检索/LLM/步骤预算、引用是否来自
+指定文档、是否缺少关键来源、是否发生答案截断，以及空知识范围下是否诚实拒答。
+
+```bash
+# .env.mac 的变量通常未 export；set -a 让本次 Python 子进程能读取 API key。
+set -a; source .env.mac; set +a
+python eval/service_smoke.py --profile quick  # 4 条，日常改动后运行
+python eval/service_smoke.py --profile all    # 10 条，提交前运行
+```
+
+可用 `--case agent_qdrant_cluster_design` 只跑一条，或用
+`--json-out /tmp/pharos-smoke.json` 保存不含答案正文和 API key 的摘要。该矩阵是服务级 smoke test，
+不能替代带人工复核 golden chunk/answer 的正式质量 benchmark；它的作用是尽早发现真实调用链断裂和
+Agent 行为回退。
 
 ## 四个指标(run_eval)
 

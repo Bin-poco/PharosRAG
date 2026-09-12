@@ -91,7 +91,11 @@ data/parsed/
     ...
 ```
 
-仓库另带一套可复现的官方技术文档入门语料，不需要 MinerU Token。清单固定了 FastAPI、Docker、Qdrant 的 11 篇 Markdown 文档（包括 Docker volumes 与 bind mounts）及对应 Git revision、许可证和原始来源；下面的命令会下载并转换到同一标准目录：
+仓库另带一套可复现的官方技术文档语料，不需要 MinerU Token。清单固定了 FastAPI 10 篇、
+Docker 11 篇、Qdrant 12 篇、Celery 4 篇，共 37 篇 Markdown/RST 文档及对应 Git revision、
+许可证和原始来源；内容覆盖 API 开发与部署、容器网络/存储/安全、向量数据库检索/多租户/
+快照/扩容，以及异步任务的重试、路由和 Worker 运维，可用于构造单文档、跨章节和跨文档
+Agentic RAG 评估题。下面的命令会下载并转换到同一标准目录：
 
 ```bash
 PYTHONPATH=src python3 -m pharos import-markdown \
@@ -101,7 +105,8 @@ PYTHONPATH=src python3 -m pharos import-markdown \
 
 只增量导入某一篇可加 `--only docker__bind_mounts`；它按 `doc_id` 前缀筛选，不会重新下载其他文档。
 
-转换结果会保留 `source.md`、`metadata.json` 和 `*_content_list.json`。其中 `data/` 是本地可再生数据，不提交 Git；文档清单和导入代码会提交，因此换一台机器仍能重建相同语料。
+转换结果会保留 `source.md` 或 `source.rst`、`metadata.json` 和 `*_content_list.json`。其中
+`data/` 是本地可再生数据，不提交 Git；文档清单和导入代码会提交，因此换一台机器仍能重建相同语料。
 
 导入前先停问答服务，避免 sidecar 一边写一边读；Qdrant 和在线推理服务保持运行：
 
@@ -186,6 +191,21 @@ curl -s http://127.0.0.1:8787/v1/ask \
 ```
 
 如果只想验证检索、不调用 DeepSeek，把地址改为 `/v1/retrieve`，请求体可保持相近结构。这样更适合先调 chunk、召回和 rerank，再调生成答案。
+
+### 运行 Agentic RAG 冒烟矩阵
+
+仓库提供 10 条基于上述官方语料的真实接口用例，覆盖普通问答、自动路由、有限步 Agent、跨文档
+引用和无证据拒答。`.env.mac` 中的变量默认没有导出给 Python 子进程，所以运行前用 `set -a`：
+
+```bash
+set -a; source .env.mac; set +a
+.venv/bin/python eval/service_smoke.py --profile quick
+.venv/bin/python eval/service_smoke.py --profile all
+```
+
+`quick` 跑 4 条，适合日常修改后检查；`all` 跑全部 10 条，适合提交前检查。它会实际调用在线模型，
+因此会产生少量 API 费用。它检查路由、预算、引用来源、拒答和截断等稳定契约，不把模型措辞逐字
+固定成断言；正式准确率、召回率和忠实度仍使用 `eval/run_eval.py` 的 gold 评估流程。
 
 ## 6. 日常开发节奏
 

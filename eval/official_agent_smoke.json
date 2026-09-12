@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "description": "Production API smoke cases grounded in the pinned official technical-document corpus.",
+  "cases": [
+    {
+      "id": "direct_fastapi_request_body",
+      "tags": ["quick", "direct", "fastapi"],
+      "query": "根据文档，FastAPI 为什么建议用 Pydantic 模型声明请求体？请简要说明。",
+      "mode": "direct",
+      "top_k": 4,
+      "doc_ids": ["fastapi__request_body"],
+      "expect": {
+        "refusal": false,
+        "min_citations": 1,
+        "citation_doc_groups": [["fastapi__request_body"]]
+      }
+    },
+    {
+      "id": "auto_fastapi_background_tasks",
+      "tags": ["quick", "auto", "fastapi"],
+      "query": "FastAPI 的 BackgroundTasks 在什么时候执行，适合什么类型的工作？",
+      "mode": "auto",
+      "top_k": 4,
+      "doc_ids": ["fastapi__background_tasks"],
+      "expect": {
+        "selected_mode": "direct",
+        "refusal": false,
+        "min_citations": 1,
+        "citation_doc_groups": [["fastapi__background_tasks"]]
+      }
+    },
+    {
+      "id": "auto_qdrant_multitenancy_design",
+      "tags": ["quick", "auto", "agent", "qdrant", "multi_doc"],
+      "query": "结合 Qdrant 的 filtering、payload index 和 multitenancy 文档，设计一个按 tenant_id 隔离的多租户检索方案，并说明何时考虑 tenant shard。只总结文档明确内容。",
+      "mode": "auto",
+      "top_k": 5,
+      "doc_ids": ["qdrant__filtering", "qdrant__indexing", "qdrant__multitenancy"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 1,
+        "min_retrievals": 1,
+        "trace_actions": ["grade"],
+        "citation_doc_groups": [
+          ["qdrant__filtering", "qdrant__multitenancy"],
+          ["qdrant__indexing", "qdrant__multitenancy"]
+        ]
+      }
+    },
+    {
+      "id": "agent_fastapi_celery_execution_choice",
+      "tags": ["agent", "fastapi", "celery", "multi_doc"],
+      "query": "基于官方文档，为耗时的上传文档解析选择执行方式：说明 FastAPI 对 heavy computation 的建议，并总结 Celery 的幂等、acks_late、自动重试退避和任务时间限制。最多 8 条，每条附引用。",
+      "mode": "agent",
+      "top_k": 6,
+      "doc_ids": ["fastapi__background_tasks", "celery__tasks", "celery__workers"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 2,
+        "min_retrievals": 1,
+        "trace_actions": ["grade"],
+        "citation_doc_groups": [
+          ["fastapi__background_tasks"],
+          ["celery__tasks", "celery__workers"]
+        ]
+      }
+    },
+    {
+      "id": "agent_celery_task_reliability",
+      "tags": ["agent", "celery", "multi_section"],
+      "query": "根据 Celery 官方文档，用 5 条分别概括任务幂等性、acks_late、autoretry_for、retry_backoff、soft/hard time limit 的核心用途；不要求穷举全部参数或边界情况。",
+      "mode": "agent",
+      "top_k": 6,
+      "doc_ids": ["celery__tasks", "celery__workers"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 1,
+        "min_retrievals": 1,
+        "trace_actions": ["grade"],
+        "citation_doc_groups": [["celery__tasks", "celery__workers"]]
+      }
+    },
+    {
+      "id": "agent_docker_storage_choice",
+      "tags": ["agent", "docker", "multi_doc"],
+      "query": "综合比较 Docker volume 与 bind mount 的管理方式、宿主机耦合、可移植性和典型用途，并给出选择建议。只依据指定文档。",
+      "mode": "agent",
+      "top_k": 5,
+      "doc_ids": ["docker__volumes", "docker__bind_mounts"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 2,
+        "min_retrievals": 1,
+        "citation_doc_groups": [
+          ["docker__volumes"],
+          ["docker__bind_mounts"]
+        ]
+      }
+    },
+    {
+      "id": "agent_docker_secret_boundaries",
+      "tags": ["agent", "docker", "multi_doc"],
+      "query": "比较 Docker Compose secrets 与 Docker build secrets 的使用阶段和安全边界，并说明为什么不应把构建密钥放进 ARG 或 ENV。",
+      "mode": "agent",
+      "top_k": 5,
+      "doc_ids": ["docker__compose_secrets", "docker__build_secrets"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 2,
+        "min_retrievals": 1,
+        "citation_doc_groups": [
+          ["docker__compose_secrets"],
+          ["docker__build_secrets"]
+        ]
+      }
+    },
+    {
+      "id": "agent_docker_networking",
+      "tags": ["agent", "docker", "multi_doc"],
+      "query": "综合说明 Docker 用户自定义 bridge、Compose 默认网络和端口发布分别解决什么问题，并指出容器间通信应优先使用服务名还是宿主机端口。",
+      "mode": "agent",
+      "top_k": 6,
+      "doc_ids": ["docker__bridge_network", "docker__compose_networking", "docker__port_publishing"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 2,
+        "min_citation_docs": 2,
+        "min_retrievals": 1
+      }
+    },
+    {
+      "id": "agent_qdrant_cluster_design",
+      "tags": ["agent", "qdrant", "multi_doc"],
+      "query": "请用最多 8 条综合设计 Qdrant 多租户集群：说明 tenant payload 过滤与索引、tenant shard、replication factor、分片扩容和分布式部署。只写文档明确能力。",
+      "mode": "agent",
+      "top_k": 6,
+      "doc_ids": ["qdrant__filtering", "qdrant__indexing", "qdrant__multitenancy", "qdrant__distributed_deployment"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": false,
+        "min_citations": 2,
+        "min_citation_docs": 2,
+        "min_retrievals": 1,
+        "trace_actions": ["grade"],
+        "citation_doc_groups": [
+          ["qdrant__multitenancy"],
+          ["qdrant__distributed_deployment"]
+        ]
+      }
+    },
+    {
+      "id": "agent_grounded_refusal_on_empty_scope",
+      "tags": ["quick", "agent", "refusal", "safety"],
+      "query": "请给出指定内部文档中的上线审批人和联系电话。",
+      "mode": "agent",
+      "top_k": 4,
+      "doc_ids": ["does_not_exist__internal_runbook"],
+      "expect": {
+        "selected_mode": "agent",
+        "refusal": true,
+        "min_citations": 0,
+        "max_citations": 0,
+        "min_retrievals": 1
+      }
+    }
+  ]
+}
