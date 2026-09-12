@@ -91,13 +91,15 @@ data/parsed/
     ...
 ```
 
-仓库另带一套可复现的官方技术文档入门语料，不需要 MinerU Token。清单固定了 FastAPI、Docker、Qdrant 的 10 篇 Markdown 文档及对应 Git revision、许可证和原始来源；下面的命令会下载并转换到同一标准目录：
+仓库另带一套可复现的官方技术文档入门语料，不需要 MinerU Token。清单固定了 FastAPI、Docker、Qdrant 的 11 篇 Markdown 文档（包括 Docker volumes 与 bind mounts）及对应 Git revision、许可证和原始来源；下面的命令会下载并转换到同一标准目录：
 
 ```bash
 PYTHONPATH=src python3 -m pharos import-markdown \
   --manifest config/official_tech_docs.json \
   --dest data/parsed
 ```
+
+只增量导入某一篇可加 `--only docker__bind_mounts`；它按 `doc_id` 前缀筛选，不会重新下载其他文档。
 
 转换结果会保留 `source.md`、`metadata.json` 和 `*_content_list.json`。其中 `data/` 是本地可再生数据，不提交 Git；文档清单和导入代码会提交，因此换一台机器仍能重建相同语料。
 

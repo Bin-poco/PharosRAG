@@ -2,7 +2,7 @@
 
 The core chunker consumes MinerU-style ``*_content_list.json`` files.  Technical
 documentation is commonly published as Markdown, so this module provides a
-lightweight, dependency-free ingestion path without pretending Markdown has PDF
+lightweight ingestion path without pretending Markdown has PDF
 layout or page coordinates.
 """
 from __future__ import annotations
@@ -10,10 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import urllib.request
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
+import httpx
 
 
 _DOC_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]*(?:__[a-z0-9][a-z0-9_.-]*)?$", re.I)
@@ -151,17 +153,36 @@ def markdown_to_content_list(text: str, *, title: str, source_url: str = "") -> 
     return elements
 
 
-def _download_text(url: str, timeout: float) -> str:
+def _download_text(url: str, timeout: float, attempts: int = 3) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.netloc:
         raise MarkdownCorpusError(f"只允许 HTTPS 文档源: {url}")
-    request = urllib.request.Request(url, headers={"User-Agent": "PharosRAG-corpus-builder/1.0"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = response.read()
-    return data.decode("utf-8")
+    candidates = [url]
+    # 某些网络/代理会持续截断 raw.githubusercontent.com；GitHub 的 /raw/ 路径指向同一
+    # owner/revision/path，作为固定版本的等价下载通道，不回退到会漂移的默认分支。
+    raw_match = re.fullmatch(r"https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.*)", url)
+    if raw_match:
+        owner, repo, revision, path = raw_match.groups()
+        candidates.append(f"https://github.com/{owner}/{repo}/raw/{revision}/{path}")
+    last_error: Exception | None = None
+    for candidate in candidates:
+        for attempt in range(max(1, attempts)):
+            try:
+                response = httpx.get(
+                    candidate, headers={"User-Agent": "PharosRAG-corpus-builder/1.0"},
+                    follow_redirects=True, timeout=timeout)
+                response.raise_for_status()
+                return response.content.decode("utf-8")
+            except (httpx.HTTPError, TimeoutError, OSError) as exc:
+                last_error = exc
+                if attempt + 1 < max(1, attempts):
+                    time.sleep(0.25 * (2 ** attempt))
+    raise MarkdownCorpusError(
+        f"下载 Markdown 失败({type(last_error).__name__}): {url}") from last_error
 
 
-def import_manifest(manifest_path: str | Path, dest: str | Path, *, timeout: float = 30.0) -> int:
+def import_manifest(manifest_path: str | Path, dest: str | Path, *, timeout: float = 30.0,
+                    only: str | None = None) -> int:
     """Download all manifest documents and write normalized per-document directories."""
     manifest_path = Path(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -184,6 +205,9 @@ def import_manifest(manifest_path: str | Path, dest: str | Path, *, timeout: flo
             raise MarkdownCorpusError(f"非法 doc_id: {doc_id!r}")
         if doc_id in seen:
             raise MarkdownCorpusError(f"重复 doc_id: {doc_id}")
+        if only and not doc_id.startswith(only):
+            seen.add(doc_id)
+            continue
         if not title or not raw_url or not source_url:
             raise MarkdownCorpusError(f"{doc_id}: title/raw_url/source_url 均为必填")
         seen.add(doc_id)
@@ -210,4 +234,6 @@ def import_manifest(manifest_path: str | Path, dest: str | Path, *, timeout: flo
         )
         imported += 1
         print(f"  [{imported:2d}] {doc_id}: {len(content)} elements, sha256={digest[:12]}", flush=True)
+    if only and not imported:
+        raise MarkdownCorpusError(f"--only 未匹配任何文档: {only}")
     return imported

@@ -65,6 +65,8 @@ class AgentRun:
     elapsed_ms: float
     limits: AgentLimits
     degraded: bool = False
+    # 只供离线评估计算 recall；HTTP 响应不暴露该字段，外部仍通过 citations/trace 观察。
+    evidence_chunk_ids: list[str] = field(default_factory=list)
 
     def budget_dict(self) -> dict[str, Any]:
         return {
@@ -241,7 +243,8 @@ class AgenticRunner:
                 answer=answer, requested_mode=mode, selected_mode=selected_mode,
                 route_reasons=route_reasons, trace=trace, retrievals=retrievals,
                 llm_calls=llm_calls, elapsed_ms=elapsed() * 1000,
-                limits=self.limits, degraded=degraded)
+                limits=self.limits, degraded=degraded,
+                evidence_chunk_ids=[str(row["hit"].chunk_id) for row in merged])
 
         if mode == "agent":
             route_reasons.append("forced_agent")

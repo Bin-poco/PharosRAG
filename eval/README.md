@@ -20,7 +20,7 @@
 | 脚本 | 干什么 | 依赖 |
 |---|---|---|
 | `gen_gold.py` | **7.0(快速版)** 从 demo 索引采样 chunk,DeepSeek 据每段生成 (问题, golden 答案) → `gold.jsonl` | CPU + DeepSeek |
-| `run_eval.py` | **7.A/7.B** 跑系统出四指标 + 单跳 vs agentic 双层归因(`--judge none` 出 rows 交 Claude 裁判) | GPU + DeepSeek |
+| `run_eval.py` | **7.A/7.B** 跑系统出四指标；默认对比当前生产 `single/agent/auto`，也能复现历史 agentic/decompose 基线 | GPU + DeepSeek |
 | `acl_regression.py` | **7.C** 自建 2 租户合成库,断言跨租户/无权/unset 身份对受限内容 **0 召回** | GPU |
 | `index_eval_corpus.py` | 扩语料:15 篇 parsed/ → 更大评估库 `~/rag_eval_big` | GPU |
 | `dump_chunks.py` | 扫库采样 → `_units/`(给 Claude 子 agent 造 gold 的输入) | CPU |
@@ -36,12 +36,23 @@
 - **忠实度**(LLM-judge):答案每个论断是否都有上下文支持 —— 防幻觉。合理拒答("信息不足")算忠实。
 - **正确性**(LLM-judge):答案是否与 golden 答案事实一致。
 
-## 双层归因(7.B,`--mode both`)
+## 当前生产路径对比(7.B,`--mode production`)
+
+- **single**：生产 `Generator` 的一次检索闭管道；
+- **agent**：生产 `AgenticRunner`，强制证据判断与有限补检；
+- **auto**：生产 `AgenticRunner` 自动路由，简单题保持 direct，复杂/零召回/拒答题升级；
+- **paired Δ**：三条路径跑同一份 gold，再比较正确率、引用召回、平均检索轮和成本字段。
+
+`results_agent.json` 与 `results_auto.json` 还记录每题 `selected_mode`、`llm_calls` 和 `degraded`，可统计
+自动路由比例与控制器降级率。生产 Agent 的检索结果直接取自 `AgentRun.evidence_chunk_ids`，证据组装
+复用 `Generator.prepare_contexts()`，不会再出现评估路径漏掉表格 `content_raw` 或章节标题的问题。
+
+## 历史双层归因(`--mode both`)
 
 把"检索组件的功劳"和"agent 多跳擦屁股的功劳"分开:
 
 - **single**:闭管道单跳(retrieve 一次 → 生成),= 组件层基线。
-- **agentic**:DeepSeek 判断上下文够不够,不够就**改写 query 再搜**,累积上下文再生成,= 模拟 agent。
+- **agentic**:早期评估专用原型，DeepSeek 判断上下文够不够,不够就**改写 query 再搜**,累积上下文再生成。
 - **Δ = agentic − single**:正的 `correctness Δ` = agent 的多跳真补上了单跳检索的缺口;`avg_rounds` 上升 = 多花的检索代价。
 
 > 这一栏是 agentic RAG 的核心论据:如果 Δ≈0,说明单跳检索已够好、agent 多跳是浪费;Δ 明显为正才证明 agent 驱动有价值。
@@ -51,7 +62,8 @@
 ```bash
 conda activate pharos
 python eval/gen_gold.py --per-doc 6        # 生成 gold.jsonl(~24 条)
-python eval/run_eval.py --mode both        # 四指标 + 双层归因;结果落 results_single.json / results_agentic.json
+python eval/run_eval.py --mode production  # 当前 single/agent/auto 三路对比
+python eval/run_eval.py --mode both        # 仅用于复现历史 single/agentic 数字
 python eval/acl_regression.py              # ACL 隔离回归,退出码 0=无泄漏
 ```
 

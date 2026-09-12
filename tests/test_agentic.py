@@ -83,6 +83,7 @@ def test_forced_agent_rewrites_and_merges_evidence():
     run = runner.run("设计方案", make_user(), mode="agent", strategy="hybrid")
     assert run.selected_mode == "agent" and not run.degraded
     assert run.retrievals == 2 and run.llm_calls == 3
+    assert run.evidence_chunk_ids == ["c1", "c2"]
     assert [c.marker for c in run.answer.citations] == [1, 2]
     assert [call["query"] for call in retriever.calls] == ["设计方案", "生产环境 Docker 持久化"]
     assert [s["action"] for s in run.trace] == ["route", "retrieve", "grade", "retrieve", "grade", "answer"]

@@ -8,7 +8,11 @@
     `--judge none` 不判,只产出 rows(含 answer + 喂进的 context + golden_answer),交给【Claude 子agent 裁判】去偏。
 
 多跳:gold 用 golden_chunk_ids(列表);单跳=长度 1。retrieval/citation recall 按"命中比例"算。
-模式 --mode single|agentic|both:single 闭管道单跳;agentic DeepSeek 驱动 query 改写多跳(=被测 agent,非裁判)。
+模式:
+  single:生产 Generator 闭管道;
+  agent/auto:生产 AgenticRunner 的强制 Agent/自动路由;
+  agentic:保留历史评估用的旧版 query-rewrite 原型,只用于复现旧基线;
+  production:一次对比 single/agent/auto。
 
 用法(去偏全流程):
   PHAROS_EVAL_SRC=~/rag_eval_big PHAROS_EVAL_COLLECTION=evalbig \
@@ -105,6 +109,7 @@ def run_single(retriever, gen, query, user, k, rerank, smart_tables=False):
 
 
 def run_agentic(retriever, tllm, jllm, query, user, k, rounds):
+    """历史 query-rewrite 原型；保留用于复现旧基线，不代表当前生产 Agent。"""
     from generator import PromptBuilder
     collected, seen, union_ids, queries = [], set(), [], [query]
     cur_q, n_rounds = query, 0
@@ -133,6 +138,21 @@ def run_agentic(retriever, tllm, jllm, query, user, k, rounds):
     cited_ids = [collected[n - 1]["chunk_id"] for n in cited if 1 <= n <= len(collected)]
     ctx_text = next((m.content for m in messages if m.role == "user"), "")
     return answer, cited_ids, _dedup(union_ids), ctx_text, n_rounds, queries
+
+
+def run_production_agent(gen, query, user, k, rerank, mode):
+    """直接运行生产 AgenticRunner，避免评估路径与线上实现漂移。"""
+    from pharos import config
+    from pharos.engine import build_agentic_runner
+
+    run = build_agentic_runner(gen, config.from_env()).run(
+        query, user, mode=mode, top_k=k, rerank=rerank)
+    ctx_text = next((m.content for m in run.answer.raw_messages if m.role == "user"), "")
+    queries = [step["query"] for step in run.trace
+               if step.get("action") == "retrieve" and step.get("query")]
+    return (run.answer.text, [c.chunk_id for c in run.answer.citations],
+            run.evidence_chunk_ids, ctx_text, run.retrievals, queries,
+            run.selected_mode, run.llm_calls, run.degraded)
 
 
 def run_decompose(retriever, tllm, jllm, query, user, k, max_subs=4, cap=14):
@@ -166,12 +186,18 @@ def evaluate(mode, retriever, gen, tllm, jllm, gold, user, k, rerank, rounds, ju
     for i, g in enumerate(gold, 1):
         gcids = g.get("golden_chunk_ids") or ([g["golden_chunk_id"]] if g.get("golden_chunk_id") else [])
         q, hop = g["query"], g.get("hop", "single")
+        selected_mode, llm_calls, degraded = mode, None, False
         if mode == "single":
             ans, cited, retrieved, ctx_text, retried, retry_kept = run_single(
                 retriever, gen, q, user, k, rerank, smart_tables=smart_tables)
             n_rounds, queries = 1, [q]
         elif mode == "decompose":
             ans, cited, retrieved, ctx_text, n_rounds, queries = run_decompose(retriever, tllm, jllm, q, user, k)
+            retried = retry_kept = False
+        elif mode in ("agent", "auto"):
+            (ans, cited, retrieved, ctx_text, n_rounds, queries,
+             selected_mode, llm_calls, degraded) = run_production_agent(
+                gen, q, user, k, rerank, mode)
             retried = retry_kept = False
         else:
             ans, cited, retrieved, ctx_text, n_rounds, queries = run_agentic(retriever, tllm, jllm, q, user, k, rounds)
@@ -189,6 +215,7 @@ def evaluate(mode, retriever, gen, tllm, jllm, gold, user, k, rerank, rounds, ju
                      "retrieval_hit_frac": hit_frac, "retrieval_full": gset <= rset and bool(gset),
                      "rank": best_rank(gcids, retrieved), "citation_recall": cit_frac, "n_citations": len(cited),
                      "n_rounds": n_rounds, "queries": queries, "faithful": faith, "correct": correct,
+                     "selected_mode": selected_mode, "llm_calls": llm_calls, "degraded": degraded,
                      "faith_reason": fr, "correct_reason": cr,
                      "retried": retried, "retry_kept": retry_kept})
         mk = lambda v: ("✓" if v else "·")
@@ -221,7 +248,10 @@ def show(tag, a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["single", "agentic", "decompose", "both"], default="both")
+    ap.add_argument("--mode",
+                    choices=["single", "agent", "auto", "production", "agentic", "decompose", "both"],
+                    default="production",
+                    help="production=对比当前线上 single/agent/auto;agentic=历史原型;both=历史 single/agentic")
     ap.add_argument("--judge", choices=["deepseek", "none"], default="deepseek",
                     help="none=只算程序化指标+产出rows给Claude子agent裁判(去偏);deepseek=DeepSeek自判(有循环偏差)")
     ap.add_argument("--gold", default=os.path.join(HERE, "gold.jsonl"))
@@ -252,7 +282,10 @@ def main():
     user = demo_user()
 
     aggs = {}
-    for m in (["single", "agentic"] if args.mode == "both" else [args.mode]):
+    modes = (["single", "agentic"] if args.mode == "both"
+             else ["single", "agent", "auto"] if args.mode == "production"
+             else [args.mode])
+    for m in modes:
         print(f"\n----- 跑 {m} -----", flush=True)
         rows = evaluate(m, retriever, gen, tllm, jllm, gold, user, args.top_k, args.rerank, args.rounds,
                         args.judge, smart_tables=args.smart_tables)
@@ -266,6 +299,14 @@ def main():
         print("\n=== 双层归因(7.B):agentic − single ===")
         print(f"  正确性 {s['correctness']:.3f} -> {a['correctness']:.3f} (Δ{a['correctness']-s['correctness']:+.3f})")
         print(f"  检索召回 {s['retrieval_recall']:.3f} -> {a['retrieval_recall']:.3f} (Δ{a['retrieval_recall']-s['retrieval_recall']:+.3f})")
+    if args.mode == "production" and args.judge != "none":
+        s = aggs["single"]
+        print("\n=== 当前生产路径 paired 对比(相对 single) ===")
+        for mode in ("agent", "auto"):
+            a = aggs[mode]
+            print(f"  {mode:5s} 正确性 Δ{a['correctness']-s['correctness']:+.3f} "
+                  f"检索召回 Δ{a['retrieval_recall']-s['retrieval_recall']:+.3f} "
+                  f"平均检索轮 {a['avg_rounds']:.2f}")
     print(f"\n结果 -> eval/results_*.json" + ("(judge=none:忠实/正确待 Claude 子agent 判)" if args.judge == "none" else ""), flush=True)
 
 

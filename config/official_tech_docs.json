@@ -58,6 +58,17 @@
       "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
     },
     {
+      "doc_id": "docker__bind_mounts",
+      "title": "Docker Engine - Bind Mounts",
+      "topic": "docker",
+      "repository": "docker/docs",
+      "revision": "22e32a82b28b6dabf125325fe9cd79133dc1de4a",
+      "source_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/storage/bind-mounts.md",
+      "raw_url": "https://raw.githubusercontent.com/docker/docs/22e32a82b28b6dabf125325fe9cd79133dc1de4a/content/manuals/engine/storage/bind-mounts.md",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/docker/docs/blob/22e32a82b28b6dabf125325fe9cd79133dc1de4a/LICENSE"
+    },
+    {
       "doc_id": "docker__prune_unused_objects",
       "title": "Docker Engine - Prune Unused Objects",
       "topic": "docker",

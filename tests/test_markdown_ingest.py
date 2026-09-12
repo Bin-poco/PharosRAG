@@ -63,3 +63,73 @@ def test_manifest_rejects_unsafe_doc_id(tmp_path, monkeypatch):
     monkeypatch.setattr(markdown_ingest, "_download_text", lambda *_: "# never")
     with pytest.raises(MarkdownCorpusError, match="非法 doc_id"):
         markdown_ingest.import_manifest(path, tmp_path / "out")
+
+
+def test_download_retries_incomplete_response(monkeypatch):
+    import httpx
+    from pharos import markdown_ingest
+
+    class _Response:
+        content = b"# recovered"
+
+        def raise_for_status(self):
+            return None
+
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.RemoteProtocolError("incomplete body")
+        return _Response()
+
+    monkeypatch.setattr(markdown_ingest.httpx, "get", fake_get)
+    monkeypatch.setattr(markdown_ingest.time, "sleep", lambda _seconds: None)
+    assert markdown_ingest._download_text("https://example.test/doc.md", 1) == "# recovered"
+    assert len(calls) == 2
+
+
+def test_download_falls_back_to_github_raw_route(monkeypatch):
+    import httpx
+    from pharos import markdown_ingest
+
+    class _Response:
+        content = b"# complete"
+
+        def raise_for_status(self):
+            return None
+
+    urls = []
+
+    def fake_get(url, **kwargs):
+        urls.append(url)
+        if "raw.githubusercontent.com" in url:
+            raise httpx.RemoteProtocolError("incomplete body")
+        return _Response()
+
+    monkeypatch.setattr(markdown_ingest.httpx, "get", fake_get)
+    monkeypatch.setattr(markdown_ingest.time, "sleep", lambda _seconds: None)
+    url = "https://raw.githubusercontent.com/acme/docs/abc123/guide.md"
+    assert markdown_ingest._download_text(url, 1, attempts=2) == "# complete"
+    assert urls == [url, url, "https://github.com/acme/docs/raw/abc123/guide.md"]
+
+
+def test_manifest_only_downloads_matching_doc(tmp_path, monkeypatch):
+    from pharos import markdown_ingest
+
+    manifest = {"documents": [
+        {"doc_id": "docker__volumes", "title": "Volumes",
+         "raw_url": "https://example.test/volumes", "source_url": "https://example.test/v"},
+        {"doc_id": "docker__bind_mounts", "title": "Bind mounts",
+         "raw_url": "https://example.test/binds", "source_url": "https://example.test/b"},
+    ]}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    fetched = []
+    monkeypatch.setattr(markdown_ingest, "_download_text",
+                        lambda url, timeout: fetched.append(url) or "# Bind mounts")
+    count = markdown_ingest.import_manifest(
+        path, tmp_path / "out", only="docker__bind_mounts")
+    assert count == 1 and fetched == ["https://example.test/binds"]
+    assert (tmp_path / "out/docker__bind_mounts/metadata.json").exists()
+    assert not (tmp_path / "out/docker__volumes").exists()

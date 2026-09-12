@@ -89,6 +89,8 @@ smart-ask 属于 `direct` 路径；Agent 路径由自己的证据循环决定是
 
 状态机、预算和安全边界见 [AGENTIC_RAG.md](AGENTIC_RAG.md)。
 
+CLI 等价调用：`pharos ask --mode auto "你的问题"`；加 `--json` 可查看完整 route/trace/budget。
+
 ### POST /v1/retrieve —— 混合检索(+ small-to-big 上下文)
 请求:`{query, top_k?, rerank?=false, doc_ids?, doc_type?, kind?, mode?="full"|"concise",
 strategy?="hybrid"|"dense"|"sparse", rerank_top_n?}`

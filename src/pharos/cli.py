@@ -66,14 +66,15 @@ def cmd_parse(args) -> None:
 
 def cmd_import_markdown(args) -> None:
     from .markdown_ingest import import_manifest
-    count = import_manifest(args.manifest, args.dest, timeout=args.timeout)
+    count = import_manifest(args.manifest, args.dest, timeout=args.timeout, only=args.only)
     print(f"\nDONE -> {args.dest}  {count} 篇 Markdown 文档已转换,可执行 pharos index。", flush=True)
 
 
 def cmd_ask(args) -> None:
     with _client(args.url) as c:
         try:
-            r = c.post("/v1/ask", json={"query": args.query, "top_k": args.top_k,
+            r = c.post("/v1/ask", json={"query": args.query, "mode": args.mode,
+                                        "top_k": args.top_k,
                                         "rerank": args.rerank, "include_contexts": args.contexts,
                                         "doc_ids": args.doc_id or None, "doc_type": args.doc_type,
                                         "kind": args.kind, "strategy": args.strategy})
@@ -161,10 +162,13 @@ def main(argv: list[str] | None = None) -> None:
     sp.add_argument("--manifest", required=True, help="JSON 文档源清单")
     sp.add_argument("--dest", required=True, help="标准化语料输出目录")
     sp.add_argument("--timeout", type=float, default=30.0, help="单篇下载超时秒数")
+    sp.add_argument("--only", default=None, help="只导入 doc_id 以此前缀开头的文档")
     sp.set_defaults(fn=cmd_import_markdown)
 
-    sp = sub.add_parser("ask", help="一次性问答(经守护进程 /v1/ask,闭管道+引用)")
+    sp = sub.add_parser("ask", help="一次性问答(经守护进程 /v1/ask,direct/agent/auto+引用)")
     sp.add_argument("query")
+    sp.add_argument("--mode", default="direct", choices=["direct", "agent", "auto"],
+                    help="direct=低延迟闭管道;agent=强制补检状态机;auto=按问题和结果自动升级")
     sp.add_argument("--top-k", type=int, default=None, dest="top_k")
     sp.add_argument("--rerank", action="store_true")
     sp.add_argument("--kind", default=None, choices=["text", "table", "image", "chart"],
