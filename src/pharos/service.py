@@ -31,6 +31,7 @@ from . import __version__, config, engine, identity as identity_mod, smart, tool
 from .obs import RequestLog, Stats
 from .sessions import SessionRegistry
 from .mineru import MinerUClient
+from .jobs import SQLJobRepository
 from .uploads import DocumentUploadManager, UploadError, personal_principal
 from embedder import User
 from generator import DEFAULT_TABLE_LEG, looks_numeric
@@ -163,9 +164,12 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                         timeout_seconds=cfg.mineru_timeout_seconds,
                         max_archive_bytes=cfg.mineru_max_archive_bytes,
                     )
+                    repository = (SQLJobRepository(cfg.database_url)
+                                  if cfg.database_url else None)
                     state.upload_manager = DocumentUploadManager(
                         upload_root, state.retriever, max_bytes=cfg.max_upload_bytes,
-                        mineru_client=mineru)
+                        mineru_client=mineru, repository=repository,
+                        max_attempts=cfg.job_max_attempts)
         return state.upload_manager
 
     def _iden_name(request: Request) -> str:

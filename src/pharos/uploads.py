@@ -10,9 +10,7 @@ BackgroundTasks 只是本地版执行器：进程重启不保证任务继续，�
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import os
 import shutil
 import threading
 import uuid
@@ -23,6 +21,7 @@ from typing import BinaryIO
 from embedder import Embedder
 
 from .ingestion import IngestionPipeline, UploadError
+from .jobs import FileJobRepository
 from .mineru import MinerUClient, MinerUError
 
 log = logging.getLogger("pharos")
@@ -78,14 +77,17 @@ class DocumentUploadManager:
     """持久化上传记录并复用现有引擎建立单篇 Markdown/PDF 索引。"""
 
     def __init__(self, root: str, retriever, max_bytes: int = 10 * 1024 * 1024,
-                 mineru_client: MinerUClient | None = None):
+                 mineru_client: MinerUClient | None = None, repository=None,
+                 max_attempts: int = 3):
         self.root = Path(root).expanduser().resolve()
         self.retriever = retriever
         self.max_bytes = max(1, int(max_bytes))
         self.mineru_client = mineru_client
+        self.max_attempts = max(1, int(max_attempts))
         self._lock = threading.RLock()
         self._pipeline = None
         self.root.mkdir(parents=True, exist_ok=True)
+        self.repository = repository or FileJobRepository(self.root)
 
     def _doc_dir(self, doc_id: str) -> Path:
         # doc_id 完全由服务端生成;仍用 resolve 不变量防未来调用方误传。
@@ -93,28 +95,6 @@ class DocumentUploadManager:
         if not path.is_relative_to(self.root):
             raise UploadError("invalid_doc_id", "非法 document id。")
         return path
-
-    @staticmethod
-    def _record_path(doc_dir: Path) -> Path:
-        return doc_dir / "record.json"
-
-    def _write_record(self, record: dict) -> None:
-        doc_dir = self._doc_dir(record["document_id"])
-        doc_dir.mkdir(parents=True, exist_ok=True)
-        path = self._record_path(doc_dir)
-        tmp = path.with_suffix(".json.tmp")
-        data = json.dumps(record, ensure_ascii=False, indent=2) + "\n"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-
-    def _read_record(self, document_id: str) -> dict | None:
-        path = self._record_path(self._doc_dir(document_id))
-        if not path.is_file():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
 
     def create(self, stream: BinaryIO, *, filename: str, content_type: str | None,
                identity, access_scope: str, groups: list[str]) -> dict:
@@ -177,23 +157,22 @@ class DocumentUploadManager:
             "stage": "uploaded",
             "chunk_count": 0,
             "error_code": None,
+            "attempts": 0,
+            "max_attempts": self.max_attempts,
             "created_at": now,
             "updated_at": now,
             "source_path": str(source),
         }
-        with self._lock:
-            self._write_record(record)
-        return self.public_record(record)
+        try:
+            persisted = self.repository.create(record)
+        except Exception:
+            # 文件已经完整落盘但业务事务没有建立时，不能留下永远无人认领的孤儿目录。
+            shutil.rmtree(doc_dir, ignore_errors=True)
+            raise
+        return self.public_record(persisted)
 
     def _update(self, document_id: str, **changes) -> dict:
-        with self._lock:
-            record = self._read_record(document_id)
-            if record is None:
-                raise UploadError("not_found", "文档任务不存在。")
-            record.update(changes)
-            record["updated_at"] = _utcnow()
-            self._write_record(record)
-            return record
+        return self.repository.update_by_document(document_id, **changes)
 
     def _get_pipeline(self):
         with self._lock:
@@ -209,15 +188,7 @@ class DocumentUploadManager:
 
     def _claim(self, document_id: str) -> dict | None:
         """原子领取 queued 任务；重复调度不会并发重复建库。"""
-        with self._lock:
-            record = self._read_record(document_id)
-            if record is None:
-                raise UploadError("not_found", "文档任务不存在。")
-            if record.get("status") != "queued":
-                return None
-            record.update(status="running", stage="parsing", error_code=None, updated_at=_utcnow())
-            self._write_record(record)
-            return record
+        return self.repository.claim_by_document(document_id)
 
     def process(self, document_id: str) -> None:
         """BackgroundTasks 入口。失败转持久化 failed，不把内部异常暴露给客户端。"""
@@ -239,15 +210,8 @@ class DocumentUploadManager:
                 log.exception("upload failure state could not be persisted: doc=%s", document_id)
 
     def get_job(self, job_id: str) -> dict | None:
-        # 第一版是文件记录，规模小;后续 PostgreSQL 换成索引查询。
-        for path in self.root.glob("upload__*/record.json"):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if record.get("job_id") == job_id:
-                return self.public_record(record)
-        return None
+        record = self.repository.get_job(job_id)
+        return self.public_record(record) if record else None
 
     @staticmethod
     def public_record(record: dict) -> dict:
@@ -255,4 +219,5 @@ class DocumentUploadManager:
             "document_id", "job_id", "tenant", "owner", "filename", "size", "sha256",
             "source_format", "access_scope", "groups", "status", "stage", "chunk_count",
             "parser_batch_id", "error_code",
-            "created_at", "updated_at")}
+            "job_status", "attempts", "max_attempts", "worker_id", "celery_task_id",
+            "created_at", "updated_at", "started_at", "heartbeat_at", "finished_at")}

@@ -21,6 +21,9 @@ dependencies = [
     "jieba",                # embedder BM25 sparse 中文分词(纯 CPU)
     "numpy",
     "python-multipart>=0.0.9", # FastAPI UploadFile/form-data
+    "sqlalchemy>=2.0,<3",   # 文档/任务持久化
+    "alembic>=1.13,<2",     # 数据库 schema 迁移
+    "psycopg[binary]>=3.1,<4", # PostgreSQL 驱动
 ]
 
 [project.optional-dependencies]

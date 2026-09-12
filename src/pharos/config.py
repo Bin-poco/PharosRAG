@@ -97,6 +97,8 @@ class PharosConfig:
     corpus_dir: str = ""         # 入库语料目录(MinerU 解析产物;留仓外,PHAROS_CORPUS_DIR)
     upload_dir: str = ""         # 用户上传原文+标准化产物(留仓外,PHAROS_UPLOAD_DIR)
     max_upload_bytes: int = 10 * 1024 * 1024
+    database_url: str = ""       # 文档/任务状态库；空时保留 JSON 本地兼容模式
+    job_max_attempts: int = 3
     # 用户上传 PDF 的在线 MinerU 精准解析。token 只按环境变量名读取，不写进任务记录。
     mineru_base_url: str = "https://mineru.net"
     mineru_token_env: str = "MINERU_TOKEN_A"
@@ -156,6 +158,8 @@ def from_env() -> PharosConfig:
         upload_dir=os.path.expanduser(os.environ.get("PHAROS_UPLOAD_DIR", "").strip())
                    or os.path.join(index_dir, "uploads"),
         max_upload_bytes=_int_env("PHAROS_MAX_UPLOAD_BYTES", 10 * 1024 * 1024),
+        database_url=os.environ.get("PHAROS_DATABASE_URL", "").strip(),
+        job_max_attempts=_int_env("PHAROS_JOB_MAX_ATTEMPTS", 3),
         mineru_base_url=os.environ.get("PHAROS_MINERU_BASE_URL", "https://mineru.net").strip(),
         mineru_token_env=os.environ.get("PHAROS_MINERU_TOKEN_ENV", "MINERU_TOKEN_A").strip(),
         mineru_model_version=os.environ.get("PHAROS_MINERU_MODEL_VERSION", "vlm").strip(),
