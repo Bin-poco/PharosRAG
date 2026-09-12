@@ -66,7 +66,9 @@ PHAROS_EVAL_SRC=~/rag_eval_big PHAROS_EVAL_COLLECTION=evalbig \
 sudo systemctl start pharos
 ```
 
-> 旋钮:`--mode single|agentic|decompose|both` `--top-k 6` `--rerank` `--rounds 2` `--limit N`(冒烟)。
+> 旋钮:`--mode production|single|agent|auto|agentic|decompose|both`；默认 `production` 对比当前
+> `single/agent/auto`，`agentic|decompose|both` 仅用于复现历史基线。另有 `--top-k 6`、`--rerank`、
+> `--rounds 2`、`--limit N`(冒烟)。
 > Tier2 权威(双-Claude 异厂裁判)不在仓内可复现,需 Claude Code 多 agent 编排,详见 [../eval/README.md](../eval/README.md)。
 
 ## 6. 测试 / 门

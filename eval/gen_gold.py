@@ -2,7 +2,8 @@
 (问题, golden 答案) -> gold.jsonl。**纯 CPU + API,无需 GPU**(只 scroll payload,不编码)。
 
 为何"问题从单 chunk 生成":让 golden_chunk_id 无歧义 —— 问题就该被这段回答,citation/retrieval recall 可程序化判定,
-免人工标注。代价是问题偏单跳事实型(测不出多跳),这正是 run_eval --mode agentic 双层归因要补的盲区。
+免人工标注。代价是问题偏单跳事实型(测不出多跳),需要补充人工标注的多跳 gold，
+再用 run_eval --mode production 对比当前 single/agent/auto；--mode agentic 仅保留为历史基线。
 
 用法:conda activate pharos && python eval/gen_gold.py [--per-doc 6]
 """

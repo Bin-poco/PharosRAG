@@ -301,6 +301,10 @@ JSONL 日志保留原始路径(调试价值在磁盘不在内存)。
 
 **eval#0:agentic/decompose 的 context 组装绕过生产 Generator**——本篇的核心复盘。
 
+> 当前状态：生产评估的 `--mode agent|auto|production` 已直接运行 `AgenticRunner`，并通过
+> `Generator.prepare_contexts()` 复用线上上下文组装。下面记录的是历史 `agentic/decompose`
+> 原型的问题；这两种模式为复现旧基线而冻结，不应再被当作当前生产 Agent。
+
 - **症状**:[run_eval.py:115](../../eval/run_eval.py#L115)(run_agentic)与
   [run_eval.py:148](../../eval/run_eval.py#L148)(run_decompose)取 `text = ctx.text or hit.text`,
   从不读 payload 的 content_raw;source 行只用 title([run_eval.py:121](../../eval/run_eval.py#L121)),
