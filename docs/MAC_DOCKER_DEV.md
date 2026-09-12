@@ -9,13 +9,25 @@
           |
           v
 Pharos FastAPI :8787  -----> DeepSeek（生成答案）
-     |          |
-     |          +---------> Qdrant :6333（向量检索）
-     v
-cloud-inference :8900 -----> 阿里云百炼（Embedding + Rerank）
+     |          +---------> PostgreSQL（文档与任务状态）
+     |          +---------> Redis（Celery 消息）
+     |                            |
+     |                 +----------+----------+
+     |                 |                     |
+     |          Ingestion Worker       Control Worker
+     |          （解析与建库）          （补投与恢复）
+     |                 |                     |
+     +-----------------+---------------------+-----> Qdrant :6333（向量检索）
+                                  |
+                         cloud-inference :8900
+                                  |
+                         阿里云百炼（Embedding + Rerank）
 ```
 
-三个 Docker 容器各司其职：`qdrant` 保存向量，`cloud-inference` 把 Pharos 的内部推理协议翻译成百炼 API，`pharos` 负责建库、检索、引用、权限和问答。宿主机源代码通过只读挂载进入容器，保存 Python 文件后两个服务会自动重载，因此 Docker 部署并不妨碍改代码。
+`pharos` 负责 API、检索、引用、权限和问答；`worker` 负责耗时的文档摄取；`scheduler` 定时发送
+维护任务，`control-worker` 独立执行 Outbox 补投和失联恢复，避免被长时间 PDF 解析阻塞；PostgreSQL 是任务状态的唯一真相来源，Redis 只传递消息。`qdrant` 保存
+向量，`cloud-inference` 把内部推理协议翻译成百炼 API。宿主机源码挂载进容器，API 服务可自动
+重载；Worker 代码修改后执行 `docker compose ... restart worker control-worker scheduler`。
 
 ## 2. 首次配置
 
@@ -54,7 +66,7 @@ curl http://127.0.0.1:8787/healthz
 查看日志：
 
 ```bash
-docker compose --env-file .env.mac -f compose.mac.yml logs -f cloud-inference pharos
+docker compose --env-file .env.mac -f compose.mac.yml logs -f cloud-inference pharos worker control-worker scheduler
 ```
 
 停止但保留向量数据：
@@ -129,12 +141,21 @@ curl -sS -X POST http://127.0.0.1:8787/v1/documents \
 
 PDF 会先上传到 MinerU 在线精准解析服务，因此原始文档会离开本机；涉及内部或敏感材料时应先
 确认组织的数据合规要求，或以后把客户端切换到自建 MinerU 服务。`stage=mineru_parsing` 表示仍在
-等待解析，完成后会继续变成 `chunking`、`embedding`、`ready`。
+等待解析，完成后会继续变成 `chunking`、`embedding`、`ready`。临时故障时会显示
+`job_status=retrying, stage=waiting_retry`，不需要手动重复上传。
 
 记住响应中的 `job_id`，查看处理状态:
 
 ```bash
 curl -sS http://127.0.0.1:8787/v1/jobs/job_xxx \
+  -H "X-API-Key: $PHAROS_DEV_API_KEY"
+```
+
+任务达到最大自动重试次数后会变成 `failed`。问题修复后可创建新的重试任务（响应会给出新
+`job_id`，旧任务仍保留）：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8787/v1/jobs/job_xxx/retry \
   -H "X-API-Key: $PHAROS_DEV_API_KEY"
 ```
 
@@ -148,7 +169,7 @@ curl -sS http://127.0.0.1:8787/v1/jobs/job_xxx \
 -F "access_scope=tenant"
 ```
 
-上传原文、标准化产物和任务记录保存在 `data/uploads/`，新文档就绪后会直接进入现有
+上传原文与标准化产物保存在 `data/uploads/`，任务状态保存在 PostgreSQL 持久卷。新文档就绪后会直接进入现有
 Qdrant collection，无需停止问答服务。Markdown 本地转换；PDF 的 MinerU 结果会保留
 `content_list.json`、可选 `layout.json` 和提取图片，以支持页码引用、表格及多模态向量。
 
@@ -166,11 +187,10 @@ curl -s http://127.0.0.1:8787/v1/ask \
 
 ## 6. 日常开发节奏
 
-1. 修改 `src/pharos/`：Pharos 容器自动重载；
+1. 修改 API/检索代码：Pharos 容器自动重载；修改任务代码后重启 `worker control-worker scheduler`；
 2. 修改 `src/cloud_inference/`：在线推理适配器自动重载；
 3. 改 Python 依赖或 Dockerfile：重新执行 `up -d --build`；
 4. 改 `.env.mac`：执行 `up -d --force-recreate` 让容器重新读取；
 5. 用 `logs -f` 看调用链，用 `/readyz` 看 Qdrant、collection 和在线推理是否完整就绪。
 
-第一阶段先跑通 5–10 篇公开技术文档。之后把当前进程内 PDF 任务升级成 Redis/Celery 可靠队列，
-再补评估集、可观测性和前端，才能从“可运行项目”升级为真正适合简历展示的产品。
+可靠上传队列的设计、状态机、故障演练和面试讲法见 [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。

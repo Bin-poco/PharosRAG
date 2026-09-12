@@ -96,22 +96,72 @@ Markdown 在本地标准化；PDF 使用 MinerU 精准解析 API(`vlm`)提取正
 `PHAROS_MINERU_TOKEN_ENV` 改用其他变量名；未配置时 PDF 上传直接返回 `503 mineru_unconfigured`，
 不会留下一个注定失败的异步任务。
 
-本地第一版用 FastAPI BackgroundTasks 在响应后执行解析、切块和建库;任务状态会原子写入
-`PHAROS_UPLOAD_DIR`，但服务重启不会自动续跑未完任务。生产版将执行器/记录层替换为 Celery + Redis + PostgreSQL。
+配置 `PHAROS_DATABASE_URL` 与 `PHAROS_REDIS_URL` 后，任务状态由 PostgreSQL 持久化，Celery Worker
+执行解析/切块/建库，Redis 只作消息 broker。API 写入任务和 Outbox 后即返回；Redis 暂时不可用时
+`dispatch_delayed=true`，scheduler 会在恢复后补投。瞬态网络/推理故障使用指数退避重试，Worker
+失联任务由心跳超时恢复。未配置数据库和 Redis 时，仍可使用 JSON + FastAPI BackgroundTasks
+兼容模式，但服务重启不保证续跑。
 
 ### GET /v1/jobs/{job_id}
 
 上传者或同 tenant admin 可查;其他身份与不存在统一返回 `404`。响应中:
 
 ```json
-{"status":"ok", "document_status":"queued|running|ready|failed",
- "stage":"uploaded|parsing|mineru_parsing|chunking|embedding|ready|failed",
+{"status":"ok", "document_status":"queued|processing|ready|failed",
+ "job_status":"queued|running|retrying|succeeded|failed",
+ "stage":"uploaded|parsing|mineru_parsing|chunking|embedding|waiting_retry|ready|failed",
  "source_format":"markdown|pdf", "parser_batch_id":"batch-...|null",
- "chunk_count":12, "error_code":null}
+ "attempts":1, "max_attempts":3, "chunk_count":12, "error_code":null}
 ```
 
 PDF 常见失败码：`mineru_unconfigured`、`mineru_upload_failed`、`mineru_parse_failed`、
 `mineru_timeout`、`mineru_output_missing`。客户端只看到稳定错误码，具体异常仅进入服务端日志。
+
+### POST /v1/jobs/{job_id}/retry
+
+只有失败任务的上传者或同 tenant admin 可调用。服务会为同一文档创建新的 `job_id`，旧失败任务
+继续保留用于审计；响应 `202` 并包含 `previous_job_id`。非失败任务返回 `409 job_not_retryable`。
+生产队列与兼容模式都会立刻调度新任务。
+
+可靠任务的完整状态机、重试边界和故障恢复见 [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
+
+### GET /v1/uploads —— 上传管理清单(keys 模式)
+
+这是 PostgreSQL/JSON 管理清单，和 `GET /v1/documents` 的“当前可检索库存”不是同一个接口。
+普通用户只看到自己上传的文档；同 tenant admin 可看到全部。它会包含尚未进入 Qdrant 的
+`queued/processing/failed` 记录，默认隐藏软删除记录。
+
+查询参数：`include_deleted=false`、`limit=100`（最大 500）、`offset=0`。
+
+### POST /v1/documents/{document_id}/reindex
+
+上传者或同 tenant admin 可从保留的原文件创建新摄取任务，响应 `202 accepted`。旧索引在解析、
+切块和编码期间继续可用，到 Embedder 提交新版本时才短暂执行 `delete -> upsert -> sidecar replace`；
+旧任务历史继续保存在 PostgreSQL。文档已有活动任务时返回 `409 document_busy`。
+
+### PATCH /v1/documents/{document_id}/access
+
+请求 JSON：
+
+```json
+{"access_scope":"restricted", "groups":["g_eng"]}
+```
+
+权限规则与上传一致。服务先在数据库创建不可领取的 `held` 任务来独占该文档，再删除旧 Qdrant
+points 与 sidecar，最后以新 ACL 激活重建任务。这样权限收紧时不会出现数据库已更新、旧向量仍按
+宽权限可检索的窗口。旧索引清理失败则记录 `access_update_failed`，不提交新 ACL；中断的 `held`
+任务会由现有 stale recovery 标记失败，之后可重试。
+权限修改失败后应重新提交本接口（再次明确目标权限）；通用的 `POST /v1/jobs/{job_id}/retry` 会拒绝
+这类任务，避免在目标 ACL 未保存时误用旧 ACL 重建。
+
+### DELETE /v1/documents/{document_id}
+
+上传者或同 tenant admin 可删除。操作同步清理 Qdrant points、sidecar 与本地原文件/解析产物，
+数据库文档和任务历史采用软删除保留审计。活动任务期间返回 `409 document_busy`；瞬态清理失败时
+记录 `delete_failed` 并返回可重试的 `503`，重复 DELETE 会继续执行幂等清理。默认管理清单不再
+显示已删除文档，`GET /v1/uploads?include_deleted=true` 可查看。
+
+生命周期设计与一致性边界见 [DOCUMENT_LIFECYCLE.md](DOCUMENT_LIFECYCLE.md)。
 
 ### GET /v1/documents/{doc_id}?max_tokens=6000
 通读整篇(逐元素 ACL 门控):`{status, doc_id, text, n_tokens, n_elements_visible, truncated, trust, warning}`
