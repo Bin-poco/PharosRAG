@@ -1,11 +1,11 @@
-"""文档上传的第一版竖向闭环。
+"""带 ACL 的 Markdown/PDF 文档上传与摄取编排。
 
 边界刻意很小:
   - 身份仍由 service 的 X-API-Key middleware 给出，本模块不信任客户端 tenant;
   - Markdown 本地标准化，PDF 交给 MinerU，再复用 Chunker + Embedder 现有建库链;
-  - 任务记录按文档原子写 JSON，便于本地开发;后续换 PostgreSQL/Celery 时 API 形状不变。
+  - PostgreSQL + Celery/Redis 提供可靠队列；未配置时保留 JSON + BackgroundTasks 本地兼容模式。
 
-BackgroundTasks 只是本地版执行器：进程重启不保证任务继续，所以不伪装成生产队列。
+BackgroundTasks 只是兼容执行器：进程重启不保证任务继续，不用于生产可靠性承诺。
 """
 from __future__ import annotations
 
@@ -244,6 +244,13 @@ class DocumentUploadManager:
     def get_job(self, job_id: str) -> dict | None:
         record = self.repository.get_job(job_id)
         return self.public_record(record) if record else None
+
+    def retry_job(self, job_id: str) -> dict:
+        """为失败文档创建一条新任务，保留数据库中的旧任务历史。"""
+        new_job_id = f"job_{uuid.uuid4().hex}"
+        record = self.repository.retry_failed(
+            job_id, new_job_id=new_job_id, max_attempts=self.max_attempts)
+        return self.public_record(record)
 
     @staticmethod
     def public_record(record: dict) -> dict:

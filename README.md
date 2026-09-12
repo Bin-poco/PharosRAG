@@ -74,7 +74,10 @@ The service runs under systemd — starts at boot, restarts on failure. Day to d
 The Mac development profile also exposes an authenticated Markdown/PDF upload endpoint (`POST /v1/documents`).
 Markdown is normalized locally; PDF uses MinerU's precision API before entering the same chunk/embed/index pipeline:
 the server derives tenant/owner ACL from the API key, indexes in the background, and exposes progress at
-`GET /v1/jobs/{job_id}`. See [the API guide](docs/API.md#post-v1documents--上传并建库keys-模式).
+`GET /v1/jobs/{job_id}`. PostgreSQL, Redis and Celery provide durable state, delayed retry, Worker heartbeat and
+stale-job recovery; failed jobs can be restarted without losing their history. See
+[the API guide](docs/API.md#post-v1documents--上传并建库keys-模式) and
+[the reliable-job design](docs/RELIABLE_UPLOAD_JOBS.md).
 
 ```bash
 conda activate pharos

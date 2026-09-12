@@ -166,3 +166,28 @@ def test_retry_budget_exhaustion_is_terminal(tmp_path):
     assert failed["job_status"] == "failed"
     assert failed["status"] == "failed"
     assert repository.list_pending_outbox() == []
+
+
+def test_manual_retry_creates_new_job_and_preserves_failed_history(tmp_path):
+    record = _record()
+    record["max_attempts"] = 1
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(record)
+    repository.claim_by_document("upload__db1", worker_id="worker-a")
+    repository.update_by_document(
+        "upload__db1", status="failed", stage="failed", error_code="invalid_encoding",
+        expected_worker_id="worker-a")
+
+    retried = repository.retry_failed(
+        "job_db1", new_job_id="job_db2", max_attempts=3)
+
+    assert retried["job_id"] == "job_db2"
+    assert retried["job_status"] == "queued"
+    assert retried["attempts"] == 0 and retried["max_attempts"] == 3
+    assert repository.get_job("job_db1")["job_status"] == "failed"
+    assert repository.get_by_document("upload__db1")["job_id"] == "job_db2"
+    assert repository.list_pending_outbox() == ["job_db2"]
+
+    with pytest.raises(UploadError) as exc:
+        repository.retry_failed("job_db2", new_job_id="job_db3", max_attempts=3)
+    assert exc.value.code == "job_not_retryable"

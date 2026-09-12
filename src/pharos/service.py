@@ -327,7 +327,7 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                         file: UploadFile = File(...),
                         access_scope: str = Form("private"),
                         groups: str = Form("")):
-        """上传 Markdown 并在响应后建库。tenant/owner 只取 X-API-Key 身份，不读表单。"""
+        """上传 Markdown/PDF 并异步建库。tenant/owner 只取 X-API-Key 身份。"""
         iden = getattr(request.state, "identity", None)
         if mode != "keys" or iden is None:
             return JSONResponse({"status": "forbidden", "retriable": False,
@@ -377,6 +377,42 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
             return JSONResponse({"status": "not_found"}, status_code=404)
         out = {**record, "document_status": record.get("status"), "status": "ok"}
         return _log(request, out)
+
+    @app.post("/v1/jobs/{job_id}/retry", status_code=202)
+    def retry_upload_job(job_id: str, request: Request,
+                         background_tasks: BackgroundTasks):
+        """上传者或同 tenant 管理员可让当前失败文档创建一条新的摄取任务。"""
+        iden = getattr(request.state, "identity", None)
+        if mode != "keys" or iden is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        manager = _get_upload_manager()
+        current = manager.get_job(job_id)
+        if not current or current.get("tenant") != iden.tenant:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        if current.get("owner") != iden.name and not iden.admin:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        try:
+            record = manager.retry_job(job_id)
+        except UploadError as exc:
+            status_code = 409 if exc.code == "job_not_retryable" else 404
+            return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
+                                status_code=status_code)
+        dispatcher = _get_task_dispatcher()
+        dispatch_delayed = False
+        if dispatcher is not None:
+            try:
+                dispatcher.dispatch(record["job_id"])
+            except Exception:
+                dispatch_delayed = True
+                log.warning("ingestion retry dispatch delayed: job=%s", record["job_id"],
+                            exc_info=True)
+        else:
+            background_tasks.add_task(manager.process, record["document_id"])
+        out = {**record, "document_status": record.get("status"), "status": "accepted",
+               "previous_job_id": job_id, "dispatch_delayed": dispatch_delayed}
+        request.state.log_extra = {"status": "ok", "document_id": record["document_id"],
+                                   "job_id": record["job_id"]}
+        return JSONResponse(out, status_code=202)
 
     @app.get("/v1/documents/{doc_id}")
     def get_document(doc_id: str, request: Request, max_tokens: int = 6000):

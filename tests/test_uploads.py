@@ -197,6 +197,15 @@ class FakeUploadManager:
         record = self.records.get(job_id)
         return {k: v for k, v in record.items() if k != "acl"} if record else None
 
+    def retry_job(self, job_id):
+        record = dict(self.records[job_id])
+        if record.get("job_status", record["status"]) != "failed":
+            raise UploadError("job_not_retryable", "只有失败任务可以手动重试。")
+        record.update(job_id="job_2", status="queued", job_status="queued",
+                      stage="uploaded", attempts=0, error_code=None)
+        self.records["job_2"] = record
+        return {k: v for k, v in record.items() if k != "acl"}
+
 
 def test_upload_http_requires_role_and_job_is_owner_scoped():
     uploader = Identity(name="alice", tenant="t1", principals=["g_eng"], roles=["uploader"])
@@ -241,6 +250,33 @@ def test_upload_http_dispatches_to_queue_when_dispatcher_is_configured():
     assert response.status_code == 202
     assert dispatcher.jobs == ["job_1"]
     assert manager.processed == []
+
+
+def test_failed_upload_can_be_manually_retried_as_a_new_job():
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+    manager = FakeUploadManager()
+    manager.create(io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+                   identity=uploader, access_scope="private", groups=[])
+    manager.records["job_1"].update(status="failed", job_status="failed", stage="failed")
+
+    class FakeDispatcher:
+        jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    dispatcher = FakeDispatcher()
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader},
+                   task_dispatcher=dispatcher)
+    app.state.upload_manager = manager
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/job_1/retry", headers={"X-API-Key": "a" * 20})
+
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "job_2"
+    assert response.json()["previous_job_id"] == "job_1"
+    assert dispatcher.jobs == ["job_2"]
 
 
 def test_upload_http_reader_is_forbidden():

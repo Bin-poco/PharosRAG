@@ -99,6 +99,14 @@ class FileJobRepository:
                      record.get("worker_id") != expected_worker_id)):
                 raise UploadError("lease_lost", "任务执行权已转交给其他 Worker。")
             record.update(changes)
+            if changes.get("status") == "ready":
+                record["job_status"] = "succeeded"
+                record["finished_at"] = utcnow().isoformat()
+            elif changes.get("status") == "failed":
+                record["job_status"] = "failed"
+                record["finished_at"] = utcnow().isoformat()
+            elif changes.get("status") == "running":
+                record["job_status"] = "running"
             record["updated_at"] = utcnow().isoformat()
             self._write(record)
             return record
@@ -132,6 +140,23 @@ class FileJobRepository:
             record["heartbeat_at"] = utcnow().isoformat()
             self._write(record)
             return True
+
+    def retry_failed(self, job_id: str, *, new_job_id: str, max_attempts: int) -> dict:
+        with self._lock:
+            record = self.get_job(job_id)
+            if record is None:
+                raise UploadError("not_found", "文档任务不存在。")
+            if record.get("job_status", record.get("status")) != "failed":
+                raise UploadError("job_not_retryable", "只有失败任务可以手动重试。")
+            now = utcnow().isoformat()
+            record.update(
+                job_id=new_job_id, status="queued", job_status="queued", stage="uploaded",
+                attempts=0, max_attempts=max(1, int(max_attempts)), worker_id=None,
+                celery_task_id=None, error_code=None, started_at=None, heartbeat_at=None,
+                finished_at=None, updated_at=now,
+            )
+            self._write(record)
+            return record
 
 
 class SQLJobRepository:
@@ -404,6 +429,36 @@ class SQLJobRepository:
                 job.updated_at = now
                 document.updated_at = now
         return {"recovered": recovered, "failed": failed}
+
+    def retry_failed(self, job_id: str, *, new_job_id: str, max_attempts: int) -> dict:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, job_id=job_id, for_update=True)
+            if not row:
+                raise UploadError("not_found", "文档任务不存在。")
+            old_job, document = row
+            if document.current_job_id != old_job.job_id or old_job.status != "failed":
+                raise UploadError("job_not_retryable", "只有当前失败任务可以手动重试。")
+            job = IngestionJobRow(
+                job_id=new_job_id, document_id=document.document_id,
+                status="queued", stage="uploaded", attempts=0,
+                max_attempts=max(1, int(max_attempts)), available_at=now,
+                created_at=now, updated_at=now,
+            )
+            session.add(job)
+            session.flush()
+            document.current_job_id = new_job_id
+            document.status = "queued"
+            document.chunk_count = 0
+            document.parser_batch_id = None
+            document.updated_at = now
+            session.add(OutboxRow(
+                job_id=new_job_id, event_type="ingestion.requested",
+                payload={"job_id": new_job_id}, status="pending", attempts=0,
+                next_attempt_at=now, created_at=now, updated_at=now,
+            ))
+            session.flush()
+            return self._record(document, job)
 
     def mark_outbox_sent(self, job_id: str, celery_task_id: str) -> None:
         now = utcnow()

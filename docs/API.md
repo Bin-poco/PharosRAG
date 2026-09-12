@@ -96,22 +96,34 @@ Markdown 在本地标准化；PDF 使用 MinerU 精准解析 API(`vlm`)提取正
 `PHAROS_MINERU_TOKEN_ENV` 改用其他变量名；未配置时 PDF 上传直接返回 `503 mineru_unconfigured`，
 不会留下一个注定失败的异步任务。
 
-本地第一版用 FastAPI BackgroundTasks 在响应后执行解析、切块和建库;任务状态会原子写入
-`PHAROS_UPLOAD_DIR`，但服务重启不会自动续跑未完任务。生产版将执行器/记录层替换为 Celery + Redis + PostgreSQL。
+配置 `PHAROS_DATABASE_URL` 与 `PHAROS_REDIS_URL` 后，任务状态由 PostgreSQL 持久化，Celery Worker
+执行解析/切块/建库，Redis 只作消息 broker。API 写入任务和 Outbox 后即返回；Redis 暂时不可用时
+`dispatch_delayed=true`，scheduler 会在恢复后补投。瞬态网络/推理故障使用指数退避重试，Worker
+失联任务由心跳超时恢复。未配置数据库和 Redis 时，仍可使用 JSON + FastAPI BackgroundTasks
+兼容模式，但服务重启不保证续跑。
 
 ### GET /v1/jobs/{job_id}
 
 上传者或同 tenant admin 可查;其他身份与不存在统一返回 `404`。响应中:
 
 ```json
-{"status":"ok", "document_status":"queued|running|ready|failed",
- "stage":"uploaded|parsing|mineru_parsing|chunking|embedding|ready|failed",
+{"status":"ok", "document_status":"queued|processing|ready|failed",
+ "job_status":"queued|running|retrying|succeeded|failed",
+ "stage":"uploaded|parsing|mineru_parsing|chunking|embedding|waiting_retry|ready|failed",
  "source_format":"markdown|pdf", "parser_batch_id":"batch-...|null",
- "chunk_count":12, "error_code":null}
+ "attempts":1, "max_attempts":3, "chunk_count":12, "error_code":null}
 ```
 
 PDF 常见失败码：`mineru_unconfigured`、`mineru_upload_failed`、`mineru_parse_failed`、
 `mineru_timeout`、`mineru_output_missing`。客户端只看到稳定错误码，具体异常仅进入服务端日志。
+
+### POST /v1/jobs/{job_id}/retry
+
+只有失败任务的上传者或同 tenant admin 可调用。服务会为同一文档创建新的 `job_id`，旧失败任务
+继续保留用于审计；响应 `202` 并包含 `previous_job_id`。非失败任务返回 `409 job_not_retryable`。
+生产队列与兼容模式都会立刻调度新任务。
+
+可靠任务的完整状态机、重试边界和故障恢复见 [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
 
 ### GET /v1/documents/{doc_id}?max_tokens=6000
 通读整篇(逐元素 ACL 门控):`{status, doc_id, text, n_tokens, n_elements_visible, truncated, trust, warning}`
