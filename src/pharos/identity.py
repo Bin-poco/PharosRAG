@@ -24,6 +24,8 @@ class Identity:
     tenant: str
     principals: list[str] = field(default_factory=list)
     admin: bool = False
+    # roles 管“能做什么”;principals 管“能读什么”，两者不混用。
+    roles: list[str] = field(default_factory=lambda: ["reader"])
 
 
 def load_keys(path: str) -> dict[str, Identity]:
@@ -60,7 +62,9 @@ def load_keys(path: str) -> dict[str, Identity]:
             raise SystemExit(f"keys[{i}] 与前面的条目 key 重复")
         seen_names.add(name)
         principals = [str(p).strip() for p in (k.get("principals") or []) if str(p).strip()]
-        out[key] = Identity(name=name, tenant=tenant, principals=principals, admin=bool(k.get("admin")))
+        roles = [str(r).strip() for r in (k.get("roles") or ["reader"]) if str(r).strip()]
+        out[key] = Identity(name=name, tenant=tenant, principals=principals,
+                            admin=bool(k.get("admin")), roles=roles)
     return out
 
 
@@ -70,7 +74,8 @@ def new_key(name: str) -> str:
     return f"pk_{safe}_{secrets.token_hex(16)}"
 
 
-def append_key(path: str, *, name: str, tenant: str, principals: list[str], admin: bool = False) -> str:
+def append_key(path: str, *, name: str, tenant: str, principals: list[str], admin: bool = False,
+               roles: list[str] | None = None) -> str:
     """向 keys 文件追加一个新身份(文件不存在则创建),返回生成的 key。尽力 chmod 600。"""
     path = os.path.expanduser(path)
     data = {"keys": []}
@@ -84,7 +89,7 @@ def append_key(path: str, *, name: str, tenant: str, principals: list[str], admi
         raise SystemExit(f"name '{name}' 已存在(身份名必须唯一)")
     key = new_key(name)
     data["keys"].append({"key": key, "name": name, "tenant": tenant,
-                         "principals": principals, "admin": admin})
+                         "principals": principals, "roles": roles or ["reader"], "admin": admin})
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)

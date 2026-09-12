@@ -23,13 +23,15 @@ import time
 from contextlib import asynccontextmanager
 
 import anyio
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from . import __version__, config, engine, identity as identity_mod, smart, toolcore
 from .obs import RequestLog, Stats
 from .sessions import SessionRegistry
+from .mineru import MinerUClient
+from .uploads import DocumentUploadManager, UploadError, personal_principal
 from embedder import User
 from generator import DEFAULT_TABLE_LEG, looks_numeric
 
@@ -79,7 +81,7 @@ class GroupedReq(BaseModel):
 
 
 def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None,
-               generator_factory=None, keys=None) -> FastAPI:
+               generator_factory=None, keys=None, upload_manager=None) -> FastAPI:
     """app 工厂。生产:全默认(从 env 建配置,启动时打开真索引)。测试:注入 fake retriever/user/generator/keys。"""
     cfg = cfg or config.from_env()
     # toolcore 的交付预算读环境变量;此处把 Pharos 配置兑现到产品命名空间(cfg 为单一真源)
@@ -124,13 +126,47 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
     state.sessions = SessionRegistry()
     state.stats = Stats()                  # D11:进程内指标 + JSONL 请求日志
     state.reqlog = RequestLog(cfg.log_dir, log_queries=cfg.log_queries)
+    state.upload_manager = upload_manager
+    state.upload_manager_lock = threading.Lock()
 
     def _current_user(request: Request):
         """本次请求的引擎 User。keys 模式按解析出的身份现建(多身份核心);legacy/open 用启动绑定的。"""
         iden = getattr(request.state, "identity", None)
         if mode == "keys" and iden is not None:
-            return User(tenant=iden.tenant, principals=list(iden.principals))
+            # 个人 principal 与组 principal 同时进入 ACL 判定，支持“仅上传者可见”。
+            principals = list(dict.fromkeys([personal_principal(iden), *iden.principals]))
+            return User(tenant=iden.tenant, principals=principals)
         return state.user
+
+    def _get_upload_manager():
+        """惰性构建：不使用上传的旧部署不会额外创建目录或初始化 Embedder。"""
+        if state.upload_manager is None:
+            with state.upload_manager_lock:
+                if state.upload_manager is None:
+                    # from_env() 正常会给 upload_dir；手工构造 PharosConfig 时也必须落到
+                    # 明确的数据目录，不能让空字符串 resolve 成当前代码目录。
+                    upload_root = cfg.upload_dir or os.path.join(
+                        cfg.index_dir or os.path.expanduser("~/rag_real"), "uploads")
+                    token_names = list(dict.fromkeys([
+                        cfg.mineru_token_env, "MINERU_TOKEN", "MINERU_TOKEN_A",
+                        "MINERU_TOKEN_B", "MINERU_TOKEN_C",
+                    ]))
+                    mineru_token = next(
+                        (os.environ.get(name, "").strip() for name in token_names
+                         if name and os.environ.get(name, "").strip()), "")
+                    mineru = MinerUClient(
+                        token=mineru_token,
+                        base_url=cfg.mineru_base_url,
+                        model_version=cfg.mineru_model_version,
+                        language=cfg.mineru_language,
+                        poll_seconds=cfg.mineru_poll_seconds,
+                        timeout_seconds=cfg.mineru_timeout_seconds,
+                        max_archive_bytes=cfg.mineru_max_archive_bytes,
+                    )
+                    state.upload_manager = DocumentUploadManager(
+                        upload_root, state.retriever, max_bytes=cfg.max_upload_bytes,
+                        mineru_client=mineru)
+        return state.upload_manager
 
     def _iden_name(request: Request) -> str:
         iden = getattr(request.state, "identity", None)
@@ -283,6 +319,50 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
     @app.get("/v1/documents")
     def list_documents(request: Request):
         return _log(request, _adapt(tc._list_impl(state.retriever, _current_user(request))))
+
+    @app.post("/v1/documents", status_code=202)
+    def upload_document(request: Request, background_tasks: BackgroundTasks,
+                        file: UploadFile = File(...),
+                        access_scope: str = Form("private"),
+                        groups: str = Form("")):
+        """上传 Markdown 并在响应后建库。tenant/owner 只取 X-API-Key 身份，不读表单。"""
+        iden = getattr(request.state, "identity", None)
+        if mode != "keys" or iden is None:
+            return JSONResponse({"status": "forbidden", "retriable": False,
+                                 "hint": "上传文档只在多身份 keys 模式开放。"}, status_code=403)
+        requested_groups = [g.strip() for g in groups.split(",") if g.strip()]
+        try:
+            record = _get_upload_manager().create(
+                file.file, filename=file.filename or "", content_type=file.content_type,
+                identity=iden, access_scope=access_scope, groups=requested_groups)
+        except UploadError as exc:
+            status_code = 403 if exc.code in {
+                "upload_forbidden", "group_forbidden", "tenant_publish_forbidden"
+            } else (413 if exc.code == "file_too_large" else
+                    415 if exc.code in {"unsupported_type", "invalid_pdf"} else
+                    503 if exc.code == "mineru_unconfigured" else 400)
+            return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
+                                status_code=status_code)
+        background_tasks.add_task(_get_upload_manager().process, record["document_id"])
+        # status 是 HTTP 业务状态，document_status 是异步文档状态，不能同键互盖。
+        out = {**record, "document_status": record.get("status"), "status": "accepted"}
+        request.state.log_extra = {"status": "ok", "document_id": record["document_id"],
+                                   "job_id": record["job_id"]}
+        return JSONResponse(out, status_code=202)
+
+    @app.get("/v1/jobs/{job_id}")
+    def get_upload_job(job_id: str, request: Request):
+        """只允许上传者或同 tenant 管理员查任务；其余与不存在统一 404。"""
+        iden = getattr(request.state, "identity", None)
+        if mode != "keys" or iden is None:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        record = _get_upload_manager().get_job(job_id)
+        if not record or record.get("tenant") != iden.tenant:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        if record.get("owner") != iden.name and not iden.admin:
+            return JSONResponse({"status": "not_found"}, status_code=404)
+        out = {**record, "document_status": record.get("status"), "status": "ok"}
+        return _log(request, out)
 
     @app.get("/v1/documents/{doc_id}")
     def get_document(doc_id: str, request: Request, max_tokens: int = 6000):

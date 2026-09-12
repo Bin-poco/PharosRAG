@@ -13,6 +13,7 @@ import os
 import sys
 import uuid
 from dataclasses import asdict
+from pathlib import Path
 
 from qdrant_client import models
 
@@ -53,6 +54,17 @@ class Embedder:
         # Qdrant point id 需 uint64/UUID;chunk_id 是字符串 -> 确定性 UUID5(重跑同 id => upsert 覆盖,幂等)
         return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
 
+    @staticmethod
+    def _safe_image_path(image_root: str, image_path: str | None) -> str | None:
+        """MinerU/上传产物是不可信输入；图片只能落在当前文档解析根内。"""
+        if not image_path:
+            return None
+        root = Path(image_root).resolve()
+        candidate = (root / image_path).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            return None
+        return str(candidate)
+
     def index_document(self, doc_id: str, elements: list, chunk_result, image_root: str) -> dict:
         """elements: 原始 list[Element](idx 对齐);chunk_result: ChunkResult;
         image_root: MinerU 输出根目录(拼 image_path 绝对路径,= parsed/<doc>/)。
@@ -68,10 +80,8 @@ class Embedder:
         for ch in chunk_result.chunks:
             af = acl_split(ch.acl)
             if "image_only" in (ch.flags or []):
-                if not ch.image_path:                          # 纯图但无路径 -> 无法向量化
-                    n_skip += 1; continue
-                p = os.path.join(image_root, ch.image_path)
-                if not os.path.exists(p):                       # 路径失效(净化后/移动)-> 跳过,不静默假装
+                p = self._safe_image_path(image_root, ch.image_path)
+                if p is None:                                  # 缺失/越界/路径失效 -> 跳过
                     n_skip += 1; continue
                 dvec, svec = self.dense.encode_image([p])[0], None
                 n_img += 1

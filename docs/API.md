@@ -5,14 +5,16 @@ Base:`http://127.0.0.1:8787`(PHAROS_HOST/PORT)。请求/响应均 JSON(UTF-8)。
 ## 鉴权
 
 三种模式(DESIGN D10):**open**(仅回环无鉴权)/ **legacy**(单 `PHAROS_API_KEY`)/
-**keys**(`PHAROS_KEYS_FILE`,每 key 一个身份 name+tenant+principals+admin)。所有 /v1/* 需
+**keys**(`PHAROS_KEYS_FILE`,每 key 一个身份 name+tenant+principals+roles+admin)。所有 /v1/* 需
 `X-API-Key` 头(open 模式除外);`/healthz` 永远免鉴权。keys 模式下 key 解析成身份,逐请求把
 tenant/principals 传给引擎 ACL(决定"能看什么");未知/缺失 key → `401`。`/v1/stats` 在 keys
-模式下需 **admin** key(否则 `403`)。
+模式下需 **admin** key(否则 `403`)。上传需 `uploader` role 或 admin;服务端自动把
+`user:<name>` 加入该身份的检索 principals，用于“仅上传者可见”。
 
 ## 通用约定
 
-- **领域结果一律 HTTP 200 + `status` 字段**(客户端按状态机决策);HTTP 码只表达传输层:
+- **检索/问答领域结果 HTTP 200 + `status` 字段**(客户端按状态机决策);上传接口按 REST 语义
+  返回 `202/400/403/413/415/503`。其余 HTTP 码:
   `401`(鉴权失败)、`403`(stats 非 admin)、`422`(请求体不是合法 JSON/字段类型错)、`5xx`(崩溃)。
 - **status 状态机**(与引擎 toolcore 契约一致):`ok` / `empty` / `no_identity` / `empty_query` /
   `bad_arg` / `no_access`(无权与不存在同响应,不泄存在性)/ `config_error`(sidecar 需重建)/
@@ -67,6 +69,49 @@ content_raw?(table/chart), image_path?(image/chart,仅定位锚)}`
 
 ### GET /v1/documents
 `{status, retriable, hint, coverage:{doc_type:篇数}, documents:[{doc_id,title,…}]}`
+
+### POST /v1/documents —— 上传并建库(keys 模式)
+
+`multipart/form-data` 字段:
+
+- `file`:支持 `.md` / `.markdown`(UTF-8)和 `.pdf`,默认上限 10 MiB;
+- `access_scope`:`private`(默认)/`restricted`/`tenant`;
+- `groups`:逗号分隔;`restricted` 必填,普通 uploader 只能选自己所属 principals;
+  `tenant` 内公开仅 admin 可发布。
+
+tenant/owner 只取 `X-API-Key` 解析出的身份，客户端无参数可覆盖。响应 `202`:
+
+```json
+{
+  "status": "accepted",
+  "document_status": "queued",
+  "document_id": "upload__...",
+  "job_id": "job_...",
+  "access_scope": "private"
+}
+```
+
+Markdown 在本地标准化；PDF 使用 MinerU 精准解析 API(`vlm`)提取正文、标题层级、页码、表格和
+图片，再进入同一条切块/建库链。PDF 需在服务环境中配置 `MINERU_TOKEN_A`，也可通过
+`PHAROS_MINERU_TOKEN_ENV` 改用其他变量名；未配置时 PDF 上传直接返回 `503 mineru_unconfigured`，
+不会留下一个注定失败的异步任务。
+
+本地第一版用 FastAPI BackgroundTasks 在响应后执行解析、切块和建库;任务状态会原子写入
+`PHAROS_UPLOAD_DIR`，但服务重启不会自动续跑未完任务。生产版将执行器/记录层替换为 Celery + Redis + PostgreSQL。
+
+### GET /v1/jobs/{job_id}
+
+上传者或同 tenant admin 可查;其他身份与不存在统一返回 `404`。响应中:
+
+```json
+{"status":"ok", "document_status":"queued|running|ready|failed",
+ "stage":"uploaded|parsing|mineru_parsing|chunking|embedding|ready|failed",
+ "source_format":"markdown|pdf", "parser_batch_id":"batch-...|null",
+ "chunk_count":12, "error_code":null}
+```
+
+PDF 常见失败码：`mineru_unconfigured`、`mineru_upload_failed`、`mineru_parse_failed`、
+`mineru_timeout`、`mineru_output_missing`。客户端只看到稳定错误码，具体异常仅进入服务端日志。
 
 ### GET /v1/documents/{doc_id}?max_tokens=6000
 通读整篇(逐元素 ACL 门控):`{status, doc_id, text, n_tokens, n_elements_visible, truncated, trust, warning}`

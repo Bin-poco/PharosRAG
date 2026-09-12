@@ -1,6 +1,7 @@
 # 密钥与本地配置(绝不提交)
 .env
 .env.compose
+.env.mac
 
 # Python
 __pycache__/
@@ -9,6 +10,7 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+.DS_Store
 
 # 本地索引/临时产物
 *.local/
@@ -16,6 +18,7 @@ build/
 # 团队版:密钥文件与请求日志(绝不入库)
 *.keys.json
 pharos_logs/
+data/
 
 # MCP 本机配置(含 WSL 绝对路径/用户名;用 .mcp.json.example 占位)
 .mcp.json

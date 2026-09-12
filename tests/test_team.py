@@ -56,7 +56,8 @@ def test_keys_mode_401_and_identity_reaches_engine():
         assert r.status_code == 200 and r.json()["status"] == "ok"
         c.post("/v1/retrieve", json={"query": "q"}, headers={"X-API-Key": "pk_bob_0123456789abcdef"})
     # 身份逐请求流到引擎:alice 用 demo 租户,bob 用 other 租户(能看什么由引擎 ACL 兑现)
-    assert ret.calls[0]["user_tenant"] == "demo" and ret.calls[0]["user_principals"] == ["g_eng"]
+    assert ret.calls[0]["user_tenant"] == "demo"
+    assert ret.calls[0]["user_principals"] == ["user:alice", "g_eng"]
     assert ret.calls[1]["user_tenant"] == "other"
 
 

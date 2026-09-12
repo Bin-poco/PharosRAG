@@ -101,9 +101,11 @@ def cmd_keys_new(args) -> None:
     config.load_env()
     path = args.file or os.environ.get("PHAROS_KEYS_FILE") or os.path.expanduser("~/pharos.keys.json")
     principals = [p.strip() for p in args.principals.split(",") if p.strip()]
-    key = append_key(path, name=args.name, tenant=args.tenant, principals=principals, admin=args.admin)
+    roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+    key = append_key(path, name=args.name, tenant=args.tenant, principals=principals,
+                     roles=roles, admin=args.admin)
     print(f"已写入 {path}(建议 chmod 600;文件勿入 git)")
-    print(f"身份 {args.name}(tenant={args.tenant}, principals={principals}, admin={args.admin})")
+    print(f"身份 {args.name}(tenant={args.tenant}, principals={principals}, roles={roles}, admin={args.admin})")
     print(f"\nAPI key(只显示这一次,请安全转交给使用者):\n  {key}")
     print("\n生效方式:确认服务端 PHAROS_KEYS_FILE 指向该文件,然后 sudo systemctl restart pharos")
 
@@ -174,6 +176,7 @@ def main(argv: list[str] | None = None) -> None:
     kn.add_argument("name", help="身份名(进请求日志,不含敏感信息)")
     kn.add_argument("--tenant", required=True, help="ACL tenant(示例库建库 tenant=demo)")
     kn.add_argument("--principals", default="", help="逗号分隔 principals")
+    kn.add_argument("--roles", default="reader", help="逗号分隔 roles(reader,uploader)")
     kn.add_argument("--admin", action="store_true", help="可读 /v1/stats")
     kn.add_argument("--file", default=None, help="keys 文件(默认 PHAROS_KEYS_FILE 或 ~/pharos.keys.json)")
     kn.set_defaults(fn=cmd_keys_new)

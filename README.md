@@ -69,6 +69,11 @@ One thing worth stating plainly: **the throughput ceiling is the forward speed o
 
 The service runs under systemd — starts at boot, restarts on failure. Day to day, a team member needs their own API key and then:
 
+The Mac development profile also exposes an authenticated Markdown/PDF upload endpoint (`POST /v1/documents`).
+Markdown is normalized locally; PDF uses MinerU's precision API before entering the same chunk/embed/index pipeline:
+the server derives tenant/owner ACL from the API key, indexes in the background, and exposes progress at
+`GET /v1/jobs/{job_id}`. See [the API guide](docs/API.md#post-v1documents--上传并建库keys-模式).
+
 ```bash
 conda activate pharos
 pip install -e '.[dev]'                        # src-layout, editable install
