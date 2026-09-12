@@ -116,19 +116,33 @@ class FileJobRepository:
             record = self._read(document_id)
             if record is None:
                 raise UploadError("not_found", "文档任务不存在。")
-            if record.get("status") != "queued":
+            return self._claim_record(record, worker_id=worker_id)
+
+    def claim_by_job(self, job_id: str, *, worker_id: str | None = None) -> dict | None:
+        """按消息携带的 job_id 领取，旧消息不能越过 job 边界执行新任务。"""
+        with self._lock:
+            record = self.get_job(job_id)
+            if record is None:
                 return None
-            record.update(
-                status="running",
-                job_status="running",
-                stage="parsing",
-                attempts=int(record.get("attempts", 0)) + 1,
-                worker_id=worker_id,
-                error_code=None,
-                updated_at=utcnow().isoformat(),
-            )
-            self._write(record)
-            return record
+            return self._claim_record(record, worker_id=worker_id)
+
+    def _claim_record(self, record: dict, *, worker_id: str | None = None) -> dict | None:
+        """File 仓储的单记录领取实现；调用方必须持有 ``self._lock``。"""
+        if record.get("job_id") is None:
+            return None
+        if record.get("status") != "queued":
+            return None
+        record.update(
+            status="running",
+            job_status="running",
+            stage="parsing",
+            attempts=int(record.get("attempts", 0)) + 1,
+            worker_id=worker_id,
+            error_code=None,
+            updated_at=utcnow().isoformat(),
+        )
+        self._write(record)
+        return record
 
     def heartbeat(self, job_id: str, worker_id: str) -> bool:
         with self._lock:
@@ -259,28 +273,49 @@ class SQLJobRepository:
             row = self._load(session, document_id=document_id)
             return self._record(row[1], row[0]) if row else None
 
-    def claim_by_document(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
+    def _claim_row(self, session: Session, row, *, worker_id: str | None = None,
+                   require_current: bool = True) -> dict | None:
         now = utcnow()
+        job, document = row
+        if require_current and document.current_job_id != job.job_id:
+            return None
+        if job.status not in {"queued", "retrying"} or _aware(job.available_at) > now:
+            return None
+        job.status = "running"
+        job.stage = "parsing"
+        job.attempts += 1
+        job.worker_id = worker_id
+        job.error_code = None
+        job.error_message = None
+        job.started_at = job.started_at or now
+        job.heartbeat_at = now
+        job.updated_at = now
+        document.status = "processing"
+        document.updated_at = now
+        outbox = session.scalar(
+            select(OutboxRow).where(OutboxRow.job_id == job.job_id).with_for_update())
+        if outbox is not None:
+            # consumed 与任务领取在同一事务提交，表示消息已经真正进入业务处理。
+            outbox.status = "consumed"
+            outbox.updated_at = now
+        session.flush()
+        return self._record(document, job)
+
+    def claim_by_document(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
+        """兼容本地 BackgroundTasks；队列 Worker 必须使用 ``claim_by_job``。"""
         with Session(self.engine) as session, session.begin():
             row = self._load(session, document_id=document_id, for_update=True)
             if not row:
                 raise UploadError("not_found", "文档任务不存在。")
-            job, document = row
-            if job.status not in {"queued", "retrying"} or _aware(job.available_at) > now:
+            return self._claim_row(session, row, worker_id=worker_id)
+
+    def claim_by_job(self, job_id: str, *, worker_id: str | None = None) -> dict | None:
+        """原子领取指定 job；迟到的旧消息绝不能领取文档的新 current job。"""
+        with Session(self.engine) as session, session.begin():
+            row = self._load(session, job_id=job_id, for_update=True)
+            if not row:
                 return None
-            job.status = "running"
-            job.stage = "parsing"
-            job.attempts += 1
-            job.worker_id = worker_id
-            job.error_code = None
-            job.error_message = None
-            job.started_at = job.started_at or now
-            job.heartbeat_at = now
-            job.updated_at = now
-            document.status = "processing"
-            document.updated_at = now
-            session.flush()
-            return self._record(document, job)
+            return self._claim_row(session, row, worker_id=worker_id)
 
     def update_by_document(self, document_id: str, *, expected_worker_id: str | None = None,
                            **changes) -> dict:
@@ -388,6 +423,40 @@ class SQLJobRepository:
             session.flush()
             return self._record(document, job)
 
+    def recover_unclaimed(self, stale_seconds: int, limit: int = 100) -> dict:
+        """重新开放已发布但长期未被 Worker 领取的 Outbox 消息。
+
+        Redis 中仍然排队的原消息可能稍后到达，因此这里只恢复成 pending；真正执行仍由
+        ``claim_by_job`` 的数据库行锁和 current-job 校验保证幂等。
+        """
+        now = utcnow()
+        cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
+        recovered = 0
+        with Session(self.engine) as session, session.begin():
+            rows = list(session.execute(
+                select(OutboxRow, IngestionJobRow)
+                .join(IngestionJobRow, IngestionJobRow.job_id == OutboxRow.job_id)
+                .where(
+                    OutboxRow.status == "sent",
+                    OutboxRow.sent_at.is_not(None),
+                    OutboxRow.sent_at < cutoff,
+                    IngestionJobRow.status.in_({"queued", "retrying"}),
+                    IngestionJobRow.available_at <= now,
+                )
+                .order_by(OutboxRow.sent_at)
+                .limit(max(1, min(int(limit), 1000)))
+                .with_for_update(skip_locked=True)))
+            for outbox, job in rows:
+                outbox.status = "pending"
+                outbox.next_attempt_at = now
+                outbox.sent_at = None
+                outbox.last_error = "delivery_unconfirmed"
+                outbox.updated_at = now
+                job.celery_task_id = None
+                job.updated_at = now
+                recovered += 1
+        return {"unclaimed_recovered": recovered}
+
     def recover_stale(self, stale_seconds: int, limit: int = 100) -> dict:
         now = utcnow()
         cutoff = now - timedelta(seconds=max(1, int(stale_seconds)))
@@ -468,7 +537,10 @@ class SQLJobRepository:
             job = session.get(IngestionJobRow, job_id)
             if outbox is None or job is None:
                 raise UploadError("not_found", "待投递任务不存在。")
-            outbox.status = "sent"
+            # send_task 返回到这里之前，极快的 Worker 可能已经领取任务并将其标成 consumed。
+            # 此时不能把状态倒退回 sent，否则后续对账会制造无意义的重复消息。
+            if outbox.status != "consumed":
+                outbox.status = "sent"
             outbox.sent_at = now
             outbox.last_error = None
             outbox.attempts += 1

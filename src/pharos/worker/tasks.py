@@ -6,6 +6,8 @@ import threading
 from contextlib import contextmanager
 
 from .. import config
+from ..ingestion import is_transient_ingestion_error
+from ..uploads import retry_delay_seconds
 from .celery_app import app
 from .runtime import get_dispatcher, get_runtime
 
@@ -37,23 +39,29 @@ def _heartbeat(repository, job_id: str, worker_id: str, interval_seconds: int):
         thread.join(timeout=2)
 
 
-@app.task(bind=True, name="pharos.ingest_document")
+@app.task(bind=True, name="pharos.ingest_document", max_retries=None)
 def ingest_document(self, job_id: str):
-    runtime = get_runtime()
-    record = runtime.repository.get_job(job_id)
-    if record is None:
-        return {"status": "not_found"}
     task_id = self.request.id or "unknown-task"
     worker_id = f"{self.request.hostname or 'celery-worker'}:{task_id}"
-    log.info("ingestion task received: job=%s doc=%s worker=%s",
-             job_id, record["document_id"], worker_id)
-    with _heartbeat(runtime.repository, job_id, worker_id,
-                    runtime.cfg.job_heartbeat_seconds):
-        result = runtime.upload_manager.process(
-            record["document_id"], worker_id=worker_id, retry_on_transient=True)
+    log.info("ingestion task received: job=%s worker=%s", job_id, worker_id)
+    try:
+        runtime = get_runtime()
+        with _heartbeat(runtime.repository, job_id, worker_id,
+                        runtime.cfg.job_heartbeat_seconds):
+            result = runtime.upload_manager.process_job(
+                job_id, worker_id=worker_id, retry_on_transient=True)
+    except Exception as exc:
+        # 领取任务前 PostgreSQL/Qdrant 等基础设施暂时不可用时，业务状态还无法安全更新。
+        # 让 Celery 保留同一个 job_id 无限退避重试，Outbox 对账仍作为消息丢失的第二道保险。
+        if is_transient_ingestion_error(exc):
+            delay = retry_delay_seconds(int(self.request.retries or 0) + 1, job_id)
+            log.warning("ingestion pre-claim retry: job=%s delay=%ss", job_id, delay,
+                        exc_info=True)
+            raise self.retry(exc=exc, countdown=delay)
+        raise
     log.info("ingestion task finished: job=%s status=%s stage=%s",
              job_id, (result or {}).get("job_status"), (result or {}).get("stage"))
-    return result
+    return result or {"status": "not_found"}
 
 
 @app.task(name="pharos.dispatch_pending")
@@ -65,6 +73,9 @@ def dispatch_pending(limit: int = 100):
 def recover_stale_jobs(limit: int = 100):
     dispatcher = get_dispatcher()
     cfg = config.from_env()
+    unclaimed = dispatcher.repository.recover_unclaimed(
+        cfg.job_dispatch_stale_seconds, limit=limit)
     recovered = dispatcher.repository.recover_stale(cfg.job_stale_seconds, limit=limit)
     dispatched = dispatcher.dispatch_pending(limit=limit)
-    return {**recovered, **{f"dispatch_{key}": value for key, value in dispatched.items()}}
+    return {**unclaimed, **recovered,
+            **{f"dispatch_{key}": value for key, value in dispatched.items()}}

@@ -24,9 +24,10 @@ PostgreSQL: documents + ingestion_jobs + job_outbox
 
 - PostgreSQL 是文档和任务状态的唯一真相来源；Redis 丢消息不会丢任务。
 - Outbox 与任务在同一事务创建，避免“数据库已有任务，但消息没有发出去”的双写裂缝。
-- 消息只带 `job_id`；Worker 从数据库重新读取可信的文件路径、tenant、owner 和 ACL。
+- 消息只带 `job_id`；Worker 按这个 `job_id` 原子领取任务，再从数据库读取可信的文件路径、tenant、owner 和 ACL。迟到的旧消息不能领取人工重试创建的新任务。
 - `worker_id=hostname:celery_task_id` 是一次领取的租约标识。旧 Worker 丢失租约后不能写阶段或完成状态。
 - Heartbeat 每 15 秒续租；scheduler 每 30 秒检查超过 120 秒无心跳的 `running` 任务。
+- Outbox 使用 `pending -> sent -> consumed` 表示待发布、已进入 Redis、已被 Worker 领取；长期停在 `sent` 且任务仍未领取时会重新开放补投。
 
 ## 状态机
 
@@ -63,6 +64,7 @@ failed --(人工 retry，创建新 job)--> queued
 3. Worker 执行中崩溃：心跳停止，stale recovery 将任务重新入队；超过次数则失败。
 4. 被判失联的旧 Worker 又恢复：它的 `worker_id` 已失效，租约校验拒绝它覆盖新 Worker 状态。
 5. MinerU/在线推理暂时超时：任务进入 `waiting_retry`，到期后 Outbox 再次投递。
+6. Worker 在领取前遇到数据库短暂中断：Celery 对同一 `job_id` 退避重试；若消息长期未被领取，Outbox 对账再次补投。
 
 这里采用“至少一次投递 + 业务幂等”，不是假设消息永远只来一次。`doc_id` 和 `chunk_id` 稳定，
 重建同一文档时 Embedder 会先删除该文档旧 point，再用确定性 ID 写入，并原子替换 sidecar。
@@ -77,6 +79,7 @@ PHAROS_REDIS_URL=redis://redis:6379/0
 PHAROS_JOB_MAX_ATTEMPTS=3
 PHAROS_JOB_HEARTBEAT_SECONDS=15
 PHAROS_JOB_STALE_SECONDS=120
+PHAROS_JOB_DISPATCH_STALE_SECONDS=3600
 PHAROS_JOB_VISIBILITY_TIMEOUT=3600
 PHAROS_JOB_SOFT_TIME_LIMIT=2100
 PHAROS_JOB_TIME_LIMIT=2400
@@ -104,6 +107,7 @@ curl -sS -X POST http://127.0.0.1:8787/v1/jobs/job_xxx/retry -H "X-API-Key: $PHA
 3. 处理过程中停止 Worker，等待超过 stale 时间后重新启动，确认任务被另一 Worker 领取。
 4. 临时填写错误的推理 URL，观察 `waiting_retry` 和 `attempts`；恢复 URL 后确认成功。
 5. 上传非法 UTF-8 Markdown，确认直接 `failed`，不会浪费自动重试次数。
+6. 消息发布后短暂停止 PostgreSQL，确认 Worker 领取前会退避重试，恢复数据库后任务不会停留在 `queued + sent`。
 
 ## 简历与面试表述
 

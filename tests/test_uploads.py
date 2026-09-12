@@ -166,8 +166,8 @@ def test_transient_pipeline_failure_is_scheduled_for_retry(tmp_path):
             raise ConnectionError("temporary inference outage")
 
     manager._pipeline = FailingPipeline()
-    result = manager.process(
-        record["document_id"], worker_id="worker-a", retry_on_transient=True)
+    result = manager.process_job(
+        record["job_id"], worker_id="worker-a", retry_on_transient=True)
 
     assert result["job_status"] == "retrying"
     assert result["status"] == "queued"

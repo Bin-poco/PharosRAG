@@ -194,18 +194,40 @@ class DocumentUploadManager:
                 )
             return self._pipeline
 
-    def _claim(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
-        """原子领取 queued 任务；重复调度不会并发重复建库。"""
+    def _claim_document(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
+        """本地兼容执行器按文档领取当前任务。"""
         return self.repository.claim_by_document(document_id, worker_id=worker_id)
+
+    def _claim_job(self, job_id: str, *, worker_id: str | None = None) -> dict | None:
+        """队列执行器按消息中的 job_id 领取，不能跨任务边界。"""
+        return self.repository.claim_by_job(job_id, worker_id=worker_id)
 
     def process(self, document_id: str, *, worker_id: str | None = None,
                 retry_on_transient: bool = False) -> dict | None:
-        """执行一次摄取；队列模式下瞬态故障进入延迟重试而非直接失败。"""
+        """按文档执行当前任务；仅供无 Redis 的 BackgroundTasks 兼容模式使用。"""
+        record = self._claim_document(document_id, worker_id=worker_id)
+        if record is None:
+            current = self.repository.get_by_document(document_id)
+            return self.public_record(current) if current else None
+        return self._process_claimed(
+            record, worker_id=worker_id, retry_on_transient=retry_on_transient)
+
+    def process_job(self, job_id: str, *, worker_id: str | None = None,
+                    retry_on_transient: bool = False) -> dict | None:
+        """按 Celery 消息携带的 job_id 执行；领取前异常交给消息层重试。"""
+        record = self._claim_job(job_id, worker_id=worker_id)
+        if record is None:
+            current = self.repository.get_job(job_id)
+            return self.public_record(current) if current else None
+        return self._process_claimed(
+            record, worker_id=worker_id, retry_on_transient=retry_on_transient)
+
+    def _process_claimed(self, record: dict, *, worker_id: str | None,
+                         retry_on_transient: bool) -> dict | None:
+        """处理一条已经成功领取的任务，并负责持久化业务重试或终态。"""
+        document_id = record["document_id"]
+        job_id = record["job_id"]
         try:
-            record = self._claim(document_id, worker_id=worker_id)
-            if record is None:
-                current = self.repository.get_by_document(document_id)
-                return self.public_record(current) if current else None
             stats = self._get_pipeline().run(
                 record, lambda **changes: self._update(
                     document_id, expected_worker_id=worker_id, **changes))
@@ -217,11 +239,11 @@ class DocumentUploadManager:
             code = exc.code if isinstance(exc, (UploadError, MinerUError)) else "index_failed"
             if code == "lease_lost":
                 log.warning("upload lease lost: doc=%s worker=%s", document_id, worker_id)
-                current = self.repository.get_by_document(document_id)
+                current = self.repository.get_job(job_id)
                 return self.public_record(current) if current else None
             log.exception("upload processing failed: doc=%s code=%s", document_id, code)
             try:
-                current = self.repository.get_by_document(document_id)
+                current = self.repository.get_job(job_id)
                 if (retry_on_transient and current and
                         is_transient_ingestion_error(exc) and
                         hasattr(self.repository, "schedule_retry")):
@@ -238,7 +260,7 @@ class DocumentUploadManager:
                         expected_worker_id=worker_id)
             except Exception:
                 log.exception("upload failure state could not be persisted: doc=%s", document_id)
-        current = self.repository.get_by_document(document_id)
+        current = self.repository.get_job(job_id)
         return self.public_record(current) if current else None
 
     def get_job(self, job_id: str) -> dict | None:

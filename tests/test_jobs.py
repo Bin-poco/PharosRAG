@@ -62,12 +62,14 @@ def test_sql_repository_claim_is_single_owner_and_tracks_terminal_state(tmp_path
     second = SQLJobRepository(url)
     first.create(_record())
 
-    claimed = first.claim_by_document("upload__db1", worker_id="worker-a")
+    claimed = first.claim_by_job("job_db1", worker_id="worker-a")
     assert claimed["status"] == "processing"
     assert claimed["job_status"] == "running"
     assert claimed["attempts"] == 1
     assert claimed["worker_id"] == "worker-a"
-    assert second.claim_by_document("upload__db1", worker_id="worker-b") is None
+    assert second.claim_by_job("job_db1", worker_id="worker-b") is None
+    with Session(first.engine) as session:
+        assert session.scalar(select(OutboxRow.status)) == "consumed"
 
     first.update_by_document("upload__db1", stage="embedding")
     ready = first.update_by_document(
@@ -100,7 +102,7 @@ def test_dispatcher_publishes_only_job_id_and_marks_outbox_sent(tmp_path):
 def test_retry_waits_until_available_and_next_worker_can_claim(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
-    repository.claim_by_document("upload__db1", worker_id="worker-a")
+    repository.claim_by_job("job_db1", worker_id="worker-a")
 
     assert repository.heartbeat("job_db1", "worker-b") is False
     assert repository.heartbeat("job_db1", "worker-a") is True
@@ -112,7 +114,7 @@ def test_retry_waits_until_available_and_next_worker_can_claim(tmp_path):
     assert retrying["stage"] == "waiting_retry"
     assert retrying["attempts"] == 1
     assert repository.list_pending_outbox() == []
-    assert repository.claim_by_document("upload__db1", worker_id="worker-b") is None
+    assert repository.claim_by_job("job_db1", worker_id="worker-b") is None
 
     # 模拟退避时间已经过去，任务重新进入 Outbox 并可被另一个 Worker 领取。
     available = utcnow() - timedelta(seconds=1)
@@ -120,14 +122,14 @@ def test_retry_waits_until_available_and_next_worker_can_claim(tmp_path):
         session.get(IngestionJobRow, "job_db1").available_at = available
         session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1")).next_attempt_at = available
     assert repository.list_pending_outbox() == ["job_db1"]
-    claimed = repository.claim_by_document("upload__db1", worker_id="worker-b")
+    claimed = repository.claim_by_job("job_db1", worker_id="worker-b")
     assert claimed["attempts"] == 2 and claimed["worker_id"] == "worker-b"
 
 
 def test_worker_lease_prevents_stale_worker_from_overwriting_state(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
-    repository.claim_by_document("upload__db1", worker_id="worker-a")
+    repository.claim_by_job("job_db1", worker_id="worker-a")
 
     with pytest.raises(UploadError) as exc:
         repository.update_by_document(
@@ -140,7 +142,7 @@ def test_stale_running_job_is_recovered_through_outbox(tmp_path):
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(_record())
     repository.mark_outbox_sent("job_db1", "celery-1")
-    repository.claim_by_document("upload__db1", worker_id="dead-worker")
+    repository.claim_by_job("job_db1", worker_id="dead-worker")
     with Session(repository.engine) as session, session.begin():
         session.get(IngestionJobRow, "job_db1").heartbeat_at = utcnow() - timedelta(minutes=10)
 
@@ -158,7 +160,7 @@ def test_retry_budget_exhaustion_is_terminal(tmp_path):
     record["max_attempts"] = 1
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(record)
-    repository.claim_by_document("upload__db1", worker_id="worker-a")
+    repository.claim_by_job("job_db1", worker_id="worker-a")
 
     failed = repository.schedule_retry(
         "upload__db1", error_code="mineru_timeout", delay_seconds=10,
@@ -173,7 +175,7 @@ def test_manual_retry_creates_new_job_and_preserves_failed_history(tmp_path):
     record["max_attempts"] = 1
     repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
     repository.create(record)
-    repository.claim_by_document("upload__db1", worker_id="worker-a")
+    repository.claim_by_job("job_db1", worker_id="worker-a")
     repository.update_by_document(
         "upload__db1", status="failed", stage="failed", error_code="invalid_encoding",
         expected_worker_id="worker-a")
@@ -188,6 +190,40 @@ def test_manual_retry_creates_new_job_and_preserves_failed_history(tmp_path):
     assert repository.get_by_document("upload__db1")["job_id"] == "job_db2"
     assert repository.list_pending_outbox() == ["job_db2"]
 
+    # Redis 中迟到的旧消息只能读取旧任务，不能越过 job_id 领取新的 current job。
+    assert repository.claim_by_job("job_db1", worker_id="stale-worker") is None
+    assert repository.get_job("job_db2")["job_status"] == "queued"
+    claimed = repository.claim_by_job("job_db2", worker_id="current-worker")
+    assert claimed["job_id"] == "job_db2"
+    assert claimed["worker_id"] == "current-worker"
+
     with pytest.raises(UploadError) as exc:
         repository.retry_failed("job_db2", new_job_id="job_db3", max_attempts=3)
     assert exc.value.code == "job_not_retryable"
+
+
+def test_sent_but_unclaimed_outbox_is_reopened_for_dispatch(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+    repository.mark_outbox_sent("job_db1", "celery-lost")
+    with Session(repository.engine) as session, session.begin():
+        outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
+        outbox.sent_at = utcnow() - timedelta(hours=2)
+
+    assert repository.list_pending_outbox() == []
+    assert repository.recover_unclaimed(stale_seconds=3600) == {"unclaimed_recovered": 1}
+    assert repository.list_pending_outbox() == ["job_db1"]
+    assert repository.get_job("job_db1")["celery_task_id"] is None
+
+
+def test_fast_worker_claim_does_not_let_dispatcher_revert_outbox_state(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+
+    repository.claim_by_job("job_db1", worker_id="fast-worker")
+    repository.mark_outbox_sent("job_db1", "celery-fast")
+
+    with Session(repository.engine) as session:
+        outbox = session.scalar(select(OutboxRow).where(OutboxRow.job_id == "job_db1"))
+        assert outbox.status == "consumed"
+    assert repository.get_job("job_db1")["celery_task_id"] == "celery-fast"
