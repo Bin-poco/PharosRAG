@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pharos.jobs.models import OutboxRow
+from pharos.jobs.dispatcher import CeleryJobDispatcher
 from pharos.jobs.repository import SQLJobRepository
 
 
@@ -73,3 +74,22 @@ def test_sql_repository_claim_is_single_owner_and_tracks_terminal_state(tmp_path
     assert ready["job_status"] == "succeeded"
     assert ready["chunk_count"] == 4
     assert ready["finished_at"] is not None
+
+
+def test_dispatcher_publishes_only_job_id_and_marks_outbox_sent(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    repository.create(_record())
+
+    class FakeCelery:
+        calls = []
+
+        def send_task(self, name, *, args, task_id):
+            self.calls.append((name, args, task_id))
+
+    celery = FakeCelery()
+    task_id = CeleryJobDispatcher(repository, celery).dispatch("job_db1")
+    record = repository.get_job("job_db1")
+
+    assert celery.calls == [("pharos.ingest_document", ["job_db1"], task_id)]
+    assert record["celery_task_id"] == task_id
+    assert repository.list_pending_outbox() == []

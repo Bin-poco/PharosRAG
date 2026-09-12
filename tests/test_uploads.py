@@ -196,6 +196,30 @@ def test_upload_http_requires_role_and_job_is_owner_scoped():
         assert client.get("/v1/jobs/job_1", headers={"X-API-Key": "b" * 20}).status_code == 404
 
 
+def test_upload_http_dispatches_to_queue_when_dispatcher_is_configured():
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+    manager = FakeUploadManager()
+
+    class FakeDispatcher:
+        jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    dispatcher = FakeDispatcher()
+    app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader},
+                   task_dispatcher=dispatcher)
+    app.state.upload_manager = manager
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/documents", headers={"X-API-Key": "a" * 20},
+            files={"file": ("guide.md", b"# Guide", "text/markdown")})
+
+    assert response.status_code == 202
+    assert dispatcher.jobs == ["job_1"]
+    assert manager.processed == []
+
+
 def test_upload_http_reader_is_forbidden():
     reader = Identity(name="bob", tenant="t1", principals=["g_eng"])
     manager = FakeUploadManager()

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, select
@@ -273,3 +273,44 @@ class SQLJobRepository:
             document.updated_at = now
             session.flush()
             return self._record(document, job)
+
+    def list_pending_outbox(self, limit: int = 100) -> list[str]:
+        now = utcnow()
+        with Session(self.engine) as session:
+            statement = (select(OutboxRow.job_id)
+                         .where(OutboxRow.status == "pending",
+                                OutboxRow.next_attempt_at <= now)
+                         .order_by(OutboxRow.id)
+                         .limit(max(1, min(int(limit), 1000))))
+            return list(session.scalars(statement))
+
+    def mark_outbox_sent(self, job_id: str, celery_task_id: str) -> None:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            outbox = session.scalar(
+                select(OutboxRow).where(OutboxRow.job_id == job_id).with_for_update())
+            job = session.get(IngestionJobRow, job_id)
+            if outbox is None or job is None:
+                raise UploadError("not_found", "待投递任务不存在。")
+            outbox.status = "sent"
+            outbox.sent_at = now
+            outbox.last_error = None
+            outbox.attempts += 1
+            outbox.updated_at = now
+            job.celery_task_id = celery_task_id
+            job.updated_at = now
+
+    def mark_outbox_failed(self, job_id: str, error_code: str = "broker_unavailable") -> None:
+        now = utcnow()
+        with Session(self.engine) as session, session.begin():
+            outbox = session.scalar(
+                select(OutboxRow).where(OutboxRow.job_id == job_id).with_for_update())
+            if outbox is None:
+                return
+            outbox.status = "pending"
+            outbox.attempts += 1
+            outbox.last_error = error_code[:160]
+            # Outbox 自身也退避，但上限较短，Redis 恢复后能较快补投。
+            delay = min(300, 5 * (2 ** min(outbox.attempts - 1, 6)))
+            outbox.next_attempt_at = now + timedelta(seconds=delay)
+            outbox.updated_at = now

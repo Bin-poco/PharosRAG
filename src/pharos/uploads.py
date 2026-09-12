@@ -186,16 +186,17 @@ class DocumentUploadManager:
                 )
             return self._pipeline
 
-    def _claim(self, document_id: str) -> dict | None:
+    def _claim(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
         """原子领取 queued 任务；重复调度不会并发重复建库。"""
-        return self.repository.claim_by_document(document_id)
+        return self.repository.claim_by_document(document_id, worker_id=worker_id)
 
-    def process(self, document_id: str) -> None:
+    def process(self, document_id: str, *, worker_id: str | None = None) -> dict | None:
         """BackgroundTasks 入口。失败转持久化 failed，不把内部异常暴露给客户端。"""
         try:
-            record = self._claim(document_id)
+            record = self._claim(document_id, worker_id=worker_id)
             if record is None:
-                return
+                current = self.repository.get_by_document(document_id)
+                return self.public_record(current) if current else None
             stats = self._get_pipeline().run(
                 record, lambda **changes: self._update(document_id, **changes))
             self._update(document_id, status="ready", stage="ready",
@@ -208,6 +209,8 @@ class DocumentUploadManager:
                 self._update(document_id, status="failed", stage="failed", error_code=code)
             except Exception:
                 log.exception("upload failure state could not be persisted: doc=%s", document_id)
+        current = self.repository.get_by_document(document_id)
+        return self.public_record(current) if current else None
 
     def get_job(self, job_id: str) -> dict | None:
         record = self.repository.get_job(job_id)

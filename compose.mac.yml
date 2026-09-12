@@ -1,8 +1,39 @@
 name: pharos-mac
 
-# Apple Silicon 本地开发拓扑：Qdrant + 无 GPU 的 Pharos + DashScope 在线推理适配器。
+# Apple Silicon 本地开发拓扑：PostgreSQL + Redis/Celery + Qdrant + 无 GPU 的 Pharos。
 # 与上游 docker-compose.yml（NVIDIA/WSL2 生产拓扑）并存，不覆盖原方案。
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pharos-mac-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pharos
+      POSTGRES_USER: pharos
+      POSTGRES_PASSWORD: "${PHAROS_POSTGRES_PASSWORD:-pharos-dev-only}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pharos -d pharos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [pharos-net]
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: pharos-mac-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [pharos-net]
+
   qdrant:
     image: qdrant/qdrant:v1.18.0
     container_name: pharos-mac-qdrant
@@ -58,6 +89,20 @@ services:
       start_period: 10s
     networks: [pharos-net]
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.pharos
+    image: pharos-app:mac-dev
+    env_file: [.env.mac]
+    environment:
+      PHAROS_DATABASE_URL: "postgresql+psycopg://pharos:${PHAROS_POSTGRES_PASSWORD:-pharos-dev-only}@postgres:5432/pharos"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [pharos-net]
+
   pharos:
     build:
       context: .
@@ -76,6 +121,8 @@ services:
       PHAROS_CORPUS_DIR: /data/parsed
       PHAROS_UPLOAD_DIR: /data/uploads
       PHAROS_MAX_UPLOAD_BYTES: "10485760"
+      PHAROS_DATABASE_URL: "postgresql+psycopg://pharos:${PHAROS_POSTGRES_PASSWORD:-pharos-dev-only}@postgres:5432/pharos"
+      PHAROS_REDIS_URL: redis://redis:6379/0
       PHAROS_HOST: 0.0.0.0
       PHAROS_PORT: "8787"
       PHAROS_KEYS_FILE: /run/pharos/keys.json
@@ -119,6 +166,12 @@ services:
         condition: service_healthy
       cloud-inference:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       # 开发期允许“服务已启动但知识库尚未建立”；建库完成情况用 /readyz 单独检查。
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8787/healthz"]
@@ -128,9 +181,76 @@ services:
       start_period: 20s
     networks: [pharos-net]
 
+  worker:
+    image: pharos-app:mac-dev
+    container_name: pharos-mac-worker
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file: [.env.mac]
+    environment:
+      PYTHONPATH: /app/src
+      PHAROS_QDRANT_URL: http://qdrant:6333
+      PHAROS_INFERENCE_URL: http://cloud-inference:8900
+      PHAROS_INDEX_DIR: /index
+      PHAROS_SIDECAR_DIR: /index/sidecar
+      PHAROS_UPLOAD_DIR: /data/uploads
+      PHAROS_DATABASE_URL: "postgresql+psycopg://pharos:${PHAROS_POSTGRES_PASSWORD:-pharos-dev-only}@postgres:5432/pharos"
+      PHAROS_REDIS_URL: redis://redis:6379/0
+      PHAROS_DENSE_MODEL_PATH: /models/qwen3-vl-embedding
+      PHAROS_RERANK_MODEL_PATH: /models/qwen3-vl-rerank
+      PHAROS_GPU_NAME: ""
+    command: ["celery", "-A", "pharos.worker.celery_app:app", "worker", "--loglevel=INFO", "--concurrency=1"]
+    volumes:
+      - type: bind
+        source: ./src
+        target: /app/src
+        read_only: true
+      - type: bind
+        source: ./data/index
+        target: /index
+      - type: bind
+        source: ./data
+        target: /data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      cloud-inference:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [pharos-net]
+
+  scheduler:
+    image: pharos-app:mac-dev
+    container_name: pharos-mac-scheduler
+    restart: unless-stopped
+    env_file: [.env.mac]
+    environment:
+      PYTHONPATH: /app/src
+      PHAROS_DATABASE_URL: "postgresql+psycopg://pharos:${PHAROS_POSTGRES_PASSWORD:-pharos-dev-only}@postgres:5432/pharos"
+      PHAROS_REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "pharos.worker.celery_app:app", "beat", "--loglevel=INFO"]
+    volumes:
+      - type: bind
+        source: ./src
+        target: /app/src
+        read_only: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [pharos-net]
+
 networks:
   pharos-net:
     driver: bridge
 
 volumes:
   qdrant-data:
+  postgres-data:
+  redis-data:
