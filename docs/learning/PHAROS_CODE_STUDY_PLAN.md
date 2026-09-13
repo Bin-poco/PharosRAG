@@ -7,8 +7,8 @@
 ## 0. 当前进度
 
 - 当前阶段：阶段二——索引侧：文档怎样进入知识库
-- 当前课程：`L03 文档下载、解析与标准化（进行中）`
-- 下一步：先学习统一 Element 接缝，再顺着 `markdown_to_content_list() → content_list.json → from_mineru() → Element` 阅读两条解析路径
+- 当前课程：`L04 标题树、切块与 small-to-big 的索引基础（进行中）`
+- 下一步：先掌握 `Chunker.chunk()` 的五阶段总流程，再深入标题层级判定与 Section 树构建
 - 最近更新：2026-09-13
 - 当前环境：Apple Silicon Mac + Docker Compose + Qdrant + 阿里云 Embedding/Rerank + DeepSeek
 - 当前知识库：37 篇固定版本官方技术文档
@@ -18,8 +18,8 @@
 
 - `L01`：主体已学，独立复述与书面小结待补。
 - `L02`：已完成配置、装配、核心数据结构和数据变化图的学习。
-- `L03`：进行中；从统一 Element 接缝开始。
-- `L04` 的部分 Chunker 代码曾提前预习，不计作结课；走到 L04 时仍按本计划完整复盘。
+- `L03`：已完成文档下载、Markdown/MinerU 解析路径、统一 Element 接缝和 metadata 学习。
+- `L04`：进行中；此前预习过部分 Chunker 代码，本次按完整索引链路复盘。
 - 文档上传、可靠异步任务和文档生命周期已经实现并合入 `main`，但安排到 `L15–L16` 再系统学习。
 - “代码已实现”只表示功能和测试完成；只有完成对应阅读、实验与复述，才表示“已经掌握”。
 
@@ -172,10 +172,10 @@
 
 **完成标准**：
 
-- [ ] 能解释为什么要有统一 Element 层
-- [ ] 能说明 Markdown 导入和 MinerU 导入在哪里汇合
-- [ ] 能解释 `metadata.json` 的作用
-- [ ] 完成本课小结
+- [x] 能解释为什么要有统一 Element 层
+- [x] 能说明 Markdown 导入和 MinerU 导入在哪里汇合
+- [x] 能解释 `metadata.json` 的作用
+- [x] 完成本课小结
 
 ### L04 标题树、切块与 small-to-big 的索引基础
 
@@ -683,10 +683,18 @@
 
 #### 2026-09-13 · L03 文档下载、解析与标准化
 
-- 状态：进行中。
-- 当前学习入口：统一 `Element` 接缝，以及 Markdown 与 MinerU 两条输入路径如何汇合。
+- 状态：完成。
+- 已掌握：统一 `Element` 接缝，以及 Markdown 与 MinerU 两条输入路径如何汇合。
 - 本课执行链：`原始文档 → Markdown/RST 轻量标准化或 MinerU 解析 → content_list.json → from_mineru() → Element[] → Chunker`。
-- 下一步：逐段阅读 `markdown_to_content_list()`，用一个包含标题、正文、列表和代码块的短文档观察标准化结果。
+- 本课小结：`content_list.json` 保存解析后的内容单元，`metadata.json` 保存文档身份与来源信息；两条解析路径最终都输出 `Element[]`，使后续 Chunker 不必关心原文件格式。
+- 下一课：L04 标题树、切块与 small-to-big 的索引基础。
+
+#### 2026-09-13 · L04 标题树、切块与 small-to-big 的索引基础
+
+- 状态：进行中。
+- 当前学习入口：`Chunker.chunk()` 的五阶段总流程。
+- 本课主线：`Element[] → 噪声过滤 → 标题与面包屑 → 小 Chunk → Section 树与元数据 → ChunkResult`；查询时再把命中的小块扩展成 `BigBlock`。
+- 下一步：理解每个阶段的输入、输出和目的，再深入标题层级判定与 Section 树构建。
 
 #### 2026-09-12 · 开发检查点：上传任务与文档生命周期
 
