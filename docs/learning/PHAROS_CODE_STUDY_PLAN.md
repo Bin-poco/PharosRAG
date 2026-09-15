@@ -7,9 +7,9 @@
 ## 0. 当前进度
 
 - 当前阶段：阶段二——索引侧：文档怎样进入知识库
-- 当前课程：`L04 标题树、切块与 small-to-big 的索引基础（进行中）`
-- 下一步：先掌握 `Chunker.chunk()` 的五阶段总流程，再深入标题层级判定与 Section 树构建
-- 最近更新：2026-09-13
+- 当前课程：`L05 Embedding、稀疏向量与 Qdrant 建库（进行中）`
+- 下一步：先梳理 `Chunk → Indexer → Embedder → Point → Qdrant` 总链路，再区分 dense、sparse 与 payload
+- 最近更新：2026-09-15
 - 当前环境：Apple Silicon Mac + Docker Compose + Qdrant + 阿里云 Embedding/Rerank + DeepSeek
 - 当前知识库：37 篇固定版本官方技术文档
 - 当前验证：`/readyz`、`/v1/retrieve`、`/v1/ask` 和内置 Agentic RAG 正常；文档生命周期完成 Docker 实测；全量测试 332 passed、7 skipped
@@ -19,7 +19,8 @@
 - `L01`：主体已学，独立复述与书面小结待补。
 - `L02`：已完成配置、装配、核心数据结构和数据变化图的学习。
 - `L03`：已完成文档下载、Markdown/MinerU 解析路径、统一 Element 接缝和 metadata 学习。
-- `L04`：进行中；此前预习过部分 Chunker 代码，本次按完整索引链路复盘。
+- `L04`：已完成标题树、结构化切块、资产块、元数据盖章与查询期 small-to-big 学习和实验。
+- `L05`：进行中；从一个 Chunk 怎样成为 Qdrant point 开始。
 - 文档上传、可靠异步任务和文档生命周期已经实现并合入 `main`，但安排到 `L15–L16` 再系统学习。
 - “代码已实现”只表示功能和测试完成；只有完成对应阅读、实验与复述，才表示“已经掌握”。
 
@@ -199,10 +200,10 @@
 
 **完成标准**：
 
-- [ ] 能解释标题树如何保留文档结构
-- [ ] 能解释“小块用于检索，大块用于生成”
-- [ ] 能说出固定长度切块的两个问题
-- [ ] 完成本课小结
+- [x] 能解释标题树如何保留文档结构
+- [x] 能解释“小块用于检索，大块用于生成”
+- [x] 能说出固定长度切块的两个问题
+- [x] 完成本课小结
 
 ### L05 Embedding、稀疏向量与 Qdrant 建库
 
@@ -691,10 +692,19 @@
 
 #### 2026-09-13 · L04 标题树、切块与 small-to-big 的索引基础
 
-- 状态：进行中。
-- 当前学习入口：`Chunker.chunk()` 的五阶段总流程。
+- 状态：完成。
 - 本课主线：`Element[] → 噪声过滤 → 标题与面包屑 → 小 Chunk → Section 树与元数据 → ChunkResult`；查询时再把命中的小块扩展成 `BigBlock`。
-- 下一步：理解每个阶段的输入、输出和目的，再深入标题层级判定与 Section 树构建。
+- 已掌握：标题层级与标题栈、`Section` 树、章节分组、token 预算切块、资产原子块、Chunk 元数据盖章，以及完整章节上爬和章节内开窗的区别。
+- 实验结果：两级标题样例在 `target=18` 时产生 4 个 Chunk，其中“存储”被切成 `[3]`、`[4]` 两块；改为 `target=60` 后合并为 `[3,4]` 一块。命中“存储”小块后向父级上爬 1 层，得到 `anchor=[0,7]`、`windowed=False` 的完整文档级 BigBlock。
+- 本课小结：固定字符切块会破坏语义边界并丢失标题语境；本项目用小 Chunk 提升召回精度，同时保留 Section sidecar，在查询期按 token 预算恢复完整章节或受限窗口。
+- 下一课：L05 Embedding、稀疏向量与 Qdrant 建库。
+
+#### 2026-09-15 · L05 Embedding、稀疏向量与 Qdrant 建库
+
+- 状态：进行中。
+- 当前学习入口：一个 `Chunk` 如何转换成同时带 dense、sparse 和 payload 的 Qdrant point。
+- 本课主线：`Chunk → Embedder → dense/sparse vectors + payload → Store.upsert() → Qdrant collection`。
+- 下一步：先看 `src/pharos/indexer.py` 的建库编排，再进入 `src/embedder/embed.py` 的 point 构造。
 
 #### 2026-09-12 · 开发检查点：上传任务与文档生命周期
 
