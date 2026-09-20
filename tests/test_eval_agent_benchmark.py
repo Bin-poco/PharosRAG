@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -93,10 +94,20 @@ def test_official_gold_v2_preserves_v1_and_covers_reviewed_boundaries():
         ["docker__port_publishing"],
     ]
     agent_benchmark.validate_corpus_scope(v2, agent_benchmark.manifest_doc_ids())
-    for case in cases:
-        for doc_id in case["doc_ids"]:
-            source_dir = ROOT / "data" / "parsed" / doc_id
-            assert (source_dir / "source.md").is_file() or (source_dir / "source.rst").is_file()
+
+
+def test_official_gold_v2_local_sources_exist():
+    corpus_dir = os.environ.get("PHAROS_TEST_CORPUS_DIR")
+    if not corpus_dir:
+        pytest.skip("设置 PHAROS_TEST_CORPUS_DIR 后检查本地下载的官方语料")
+    source_root = Path(corpus_dir).expanduser()
+    assert source_root.is_dir(), f"语料目录不存在: {source_root}"
+    v2 = agent_benchmark.load_suite(ROOT / "eval" / "official_agent_gold_v2.json")
+    doc_ids = {doc_id for case in v2["cases"] for doc_id in case["doc_ids"]}
+    missing = [doc_id for doc_id in sorted(doc_ids)
+               if not any((source_root / doc_id / name).is_file()
+                          for name in ("source.md", "source.rst"))]
+    assert not missing, f"评测语料缺少源文件: {missing}"
 
 
 def test_check_response_accepts_complete_grounded_result():

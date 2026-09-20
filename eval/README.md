@@ -116,6 +116,15 @@ manifest 和来源文件检查，并由项目外模型做了[32 题证据复核]
 [`V2_BENCHMARK_2026-09-20.md`](V2_BENCHMARK_2026-09-20.md)。复核模型也协助编写了 v2，
 不是独立人工标注者；**尚未完成人工逐题签收或独立语义裁判**，`human_review` 保持 `pending`。
 
+题库结构、题目边界和 manifest 引用检查在普通 `pytest` 中始终运行，不依赖本机语料。
+下载后的 `data/parsed/` 不提交到 Git；需要检查 v2 每道题引用的本地源文件是否齐全时，显式执行：
+
+```bash
+PHAROS_TEST_CORPUS_DIR=data/parsed .venv/bin/python -m pytest -q tests/test_eval_agent_benchmark.py::test_official_gold_v2_local_sources_exist
+```
+
+未设置该变量时只跳过这项本地语料检查；设置后目录不存在或任何文档缺失都会失败。
+
 ## 四个指标(run_eval)
 
 - **检索召回@k / MRR**(组件层):golden chunk 有没有被召回、排第几 —— 只看检索,不看生成。
