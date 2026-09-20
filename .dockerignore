@@ -16,11 +16,13 @@ docs/
 
 # 密钥与本地配置(绝不进镜像)
 .env
+.env.*
 .env.compose
 .env.compose.example
 *.keys.json
 .mcp.json
 pharos_logs/
+data/
 
 # 大型可再生数据(解析产物/语料/分块;均在仓外或 gitignore)
 corpus/
