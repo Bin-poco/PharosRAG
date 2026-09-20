@@ -32,6 +32,9 @@ type Answer = {
   budget?: AgentBudget;
   degraded?: boolean;
   finish_reason?: string | null;
+  truncated?: boolean;
+  generation_calls?: number;
+  continuations?: number;
 };
 type Document = { doc_id: string; title?: string; doc_type?: string };
 type UploadRecord = {
@@ -136,6 +139,7 @@ export default function Home() {
 
   const [file, setFile] = useState<File | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const uploadAttempt = useRef({ fingerprint: "", key: "" });
   const [scope, setScope] = useState("private");
   const [groups, setGroups] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -317,12 +321,21 @@ export default function Home() {
       const body = new FormData();
       body.set("file", file); body.set("access_scope", scope);
       if (scope === "restricted") body.set("groups", groups);
-      const response = await fetch("/api/documents", { method: "POST", body });
+      const fingerprint = [file.name, file.size, file.lastModified, scope, groups].join(":");
+      if (uploadAttempt.current.fingerprint !== fingerprint) {
+        uploadAttempt.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      const response = await fetch("/api/documents", {
+        method: "POST",
+        headers: { "Idempotency-Key": uploadAttempt.current.key },
+        body,
+      });
       const data = await json(response);
       assertResponse(response, data, ["accepted"], "上传失败");
       setUploadMessage("文件已接收，正在处理。下方可查看任务状态。");
       setJobId(typeof data.job_id === "string" ? data.job_id : "");
       setJob(null); setFile(null);
+      uploadAttempt.current = { fingerprint: "", key: "" };
       if (fileInput.current) fileInput.current.value = "";
       await loadDocuments();
     } catch (error) { setUploadMessage(error instanceof Error ? error.message : "上传失败。"); }
@@ -447,7 +460,7 @@ export default function Home() {
             <div className="flex flex-wrap items-end justify-between gap-3"><div className="space-y-1"><label htmlFor="mode" className="text-xs font-medium text-slate-500">回答模式</label><select id="mode" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)} className={fieldClass}><option value="auto">自动选择</option><option value="direct">快速问答</option><option value="agent">深度检索</option></select></div><Button type="submit" disabled={asking || !query.trim()} className={primaryClass}><Search size={16} />{asking ? "正在查找…" : "开始提问"}</Button></div>
           </form></CardContent></Card>
           {askError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{askError}</p>}
-          {answer && <Card className="border-slate-200 shadow-sm"><CardHeader><div className="flex flex-wrap items-center gap-2"><CardTitle>回答</CardTitle><Badge variant="secondary">{answer.route?.selected_mode ?? mode}</Badge><span className="text-xs text-slate-500">引用 {answer.citations?.length ?? 0} 条 · 上下文 {answer.n_contexts ?? 0} 条</span></div></CardHeader><CardContent className="space-y-6">
+          {answer && <Card className="border-slate-200 shadow-sm"><CardHeader><div className="flex flex-wrap items-center gap-2"><CardTitle>回答</CardTitle><Badge variant="secondary">{answer.route?.selected_mode ?? mode}</Badge><span className="text-xs text-slate-500">引用 {answer.citations?.length ?? 0} 条 · 上下文 {answer.n_contexts ?? 0} 条{answer.continuations ? ` · 自动续写 ${answer.continuations} 次` : ""}</span></div></CardHeader><CardContent className="space-y-6">
             <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{answer.answer || "当前知识库没有足够证据回答。"}</div>
             {answer.hints?.map((item) => <p key={item} className="text-sm text-amber-700">{item}</p>)}
             <AgentTrace route={answer.route} trace={answer.trace} budget={answer.budget} degraded={answer.degraded} finishReason={answer.finish_reason} />

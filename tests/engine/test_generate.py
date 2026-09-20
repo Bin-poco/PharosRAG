@@ -237,6 +237,49 @@ def test_finish_reason_none_on_zero_recall_not_residual():
     assert ans.n_contexts == 0 and ans.finish_reason is None
 
 
+def test_length_answer_continues_and_merges_citations():
+    class _ContinuationLLM:
+        def __init__(self):
+            self.n = 0
+            self.last_finish_reason = None
+
+        def complete(self, messages):
+            self.n += 1
+            if self.n == 1:
+                self.last_finish_reason = "length"
+                return "第一部分 [cite:1]"
+            self.last_finish_reason = "stop"
+            assert messages[-2].role == "assistant"
+            assert "第一部分" in messages[-2].content
+            assert "Continue exactly" in messages[-1].content
+            return "第二部分 [cite:2]"
+
+    results = [
+        {"hit": _Hit("c1", "d1", "t1", {}), "context": _Ctx("ctx1")},
+        {"hit": _Hit("c2", "d2", "t2", {}), "context": _Ctx("ctx2")},
+    ]
+    llm = _ContinuationLLM()
+    ans = Generator(_Ret(results), llm, max_continuations=1).answer("q", user=None)
+    assert ans.text == "第一部分 [cite:1]\n第二部分 [cite:2]"
+    assert [c.marker for c in ans.citations] == [1, 2]
+    assert ans.finish_reason == "stop"
+    assert ans.generation_calls == 2 and ans.continuations == 1
+
+
+def test_generation_call_budget_prevents_continuation():
+    results = [{"hit": _Hit("c1", "d1", "t", {}), "context": _Ctx("ctx")}]
+    llm = _FRLLM(reasons=("length", "stop"), text="被截断 [cite:1]")
+    ans = Generator(_Ret(results), llm, max_continuations=2).answer_from_contexts(
+        "q", [{"text": "ctx", "source": "d1"}],
+        [{"chunk_id": "c1", "doc_id": "d1", "title": "d1", "section": "", "page": 0,
+          "text": "ctx"}],
+        max_generation_calls=1,
+    )
+    assert llm.n == 1
+    assert ans.finish_reason == "length"
+    assert ans.generation_calls == 1 and ans.continuations == 0
+
+
 # ---------- 修复:引用解析与中和共用宽松 CITE_RE(容空白/大小写) ----------
 def test_citation_spacing_variants_parsed():
     class _LooseLLM:

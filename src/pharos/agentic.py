@@ -308,10 +308,18 @@ class AgenticRunner:
                     add_trace("stop", reason=("timeout" if elapsed() >= self.limits.timeout_seconds
                                                else "llm_budget_exhausted"))
                     return Answer(text=_REFUSAL, citations=[], n_contexts=0)
-                llm_calls += 1
-            answer = deadline.call(lambda: self.generator.answer_from_contexts(query, contexts, meta))
-            add_trace("answer", outcome=outcome, n_contexts=answer.n_contexts,
-                      refusal=is_refusal(answer.text))
+            remaining_calls = max(0, self.limits.max_llm_calls - llm_calls)
+            answer = deadline.call(lambda: self.generator.answer_from_contexts(
+                query, contexts, meta, max_generation_calls=remaining_calls))
+            llm_calls += answer.generation_calls
+            trace_fields = {
+                "outcome": outcome,
+                "n_contexts": answer.n_contexts,
+                "refusal": is_refusal(answer.text),
+            }
+            if answer.continuations:
+                trace_fields["continuations"] = answer.continuations
+            add_trace("answer", **trace_fields)
             return answer
 
         def finish(answer: Answer, selected_mode: str) -> AgentRun:

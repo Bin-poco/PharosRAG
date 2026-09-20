@@ -172,6 +172,22 @@ def test_ask_zero_recall_finish_reason_none_not_residual():
     assert r["finish_reason"] is None                # 残留值 "length" 不得泄出
 
 
+def test_ask_reports_remaining_truncation_and_generation_budget():
+    class _LengthLLM:
+        last_finish_reason = "length"
+
+        def complete(self, messages):
+            return "可验证但未完成的答案 [cite:1]"
+
+    ret = FakeRetriever(results_factory=lambda: [make_res(make_hit(), ctx_text="证据")])
+    factory = lambda r, c: Generator(r, _LengthLLM(), max_continuations=0)
+    with TestClient(make_app(retriever=ret, generator_factory=factory)) as c:
+        r = c.post("/v1/ask", json={"query": "普通问题"}).json()
+    assert r["truncated"] is True and r["finish_reason"] == "length"
+    assert r["generation_calls"] == 1 and r["continuations"] == 0
+    assert any("生成预算" in hint for hint in r["hints"])
+
+
 def test_ask_failure_degrades_structured():
     class BoomGen:
         llm = None

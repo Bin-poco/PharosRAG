@@ -10,7 +10,9 @@ BackgroundTasks 只是兼容执行器：进程重启不保证任务继续，不�
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import re
 import shutil
 import threading
 import uuid
@@ -30,6 +32,8 @@ ALLOWED_SUFFIXES = {".md", ".markdown", ".pdf"}
 ACCESS_SCOPES = {"private", "restricted", "tenant"}
 MAX_FILENAME_CHARS = 512
 MAX_CONTENT_TYPE_CHARS = 160
+MAX_IDEMPOTENCY_KEY_CHARS = 128
+IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
 
 
 def personal_principal(identity) -> str:
@@ -77,6 +81,33 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def normalize_idempotency_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if (not value or len(value) > MAX_IDEMPOTENCY_KEY_CHARS or
+            IDEMPOTENCY_KEY_RE.fullmatch(value) is None):
+        raise UploadError(
+            "invalid_idempotency_key",
+            "Idempotency-Key 必须是 1-128 位字母、数字或 . _ : -。",
+        )
+    return value
+
+
+def upload_fingerprint(*, sha256: str, filename: str, content_type: str,
+                       access_scope: str, groups: list[str]) -> str:
+    payload = {
+        "sha256": sha256,
+        "filename": filename,
+        "content_type": content_type,
+        "access_scope": access_scope,
+        "groups": sorted(groups),
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def retry_delay_seconds(attempt: int, job_id: str) -> int:
     """指数退避并加入稳定抖动，防止一批故障任务同时冲击外部服务。"""
     base = min(300, 10 * (3 ** max(0, int(attempt) - 1)))
@@ -109,7 +140,9 @@ class DocumentUploadManager:
         return path
 
     def create(self, stream: BinaryIO, *, filename: str, content_type: str | None,
-               identity, access_scope: str, groups: list[str]) -> dict:
+               identity, access_scope: str, groups: list[str],
+               idempotency_key: str | None = None) -> dict:
+        normalized_idempotency_key = normalize_idempotency_key(idempotency_key)
         scope = (access_scope or "private").strip().lower()
         normalized_groups = list(dict.fromkeys(g.strip() for g in groups if g and g.strip()))
         acl = build_upload_acl(identity, scope, normalized_groups)
@@ -160,6 +193,7 @@ class DocumentUploadManager:
             raise
 
         now = _utcnow()
+        content_sha256 = digest.hexdigest()
         record = {
             "document_id": document_id,
             "job_id": job_id,
@@ -169,7 +203,7 @@ class DocumentUploadManager:
             "content_type": normalized_content_type,
             "source_format": "pdf" if suffix == ".pdf" else "markdown",
             "size": size,
-            "sha256": digest.hexdigest(),
+            "sha256": content_sha256,
             "access_scope": scope,
             "groups": normalized_groups,
             "acl": acl,
@@ -182,6 +216,16 @@ class DocumentUploadManager:
             "created_at": now,
             "updated_at": now,
             "source_path": str(source),
+            "idempotency_key": normalized_idempotency_key,
+            "idempotency_fingerprint": (
+                upload_fingerprint(
+                    sha256=content_sha256,
+                    filename=safe_name,
+                    content_type=normalized_content_type,
+                    access_scope=scope,
+                    groups=normalized_groups,
+                ) if normalized_idempotency_key else None
+            ),
         }
         try:
             persisted = self.repository.create(record)
@@ -189,6 +233,9 @@ class DocumentUploadManager:
             # 文件已经完整落盘但业务事务没有建立时，不能留下永远无人认领的孤儿目录。
             shutil.rmtree(doc_dir, ignore_errors=True)
             raise
+        if persisted.get("idempotency_replayed"):
+            # 当前请求已完整读取并校验，但真正记录由更早的同键请求创建。
+            shutil.rmtree(doc_dir, ignore_errors=True)
         return self.public_record(persisted)
 
     def _update(self, document_id: str, **changes) -> dict:
@@ -374,9 +421,12 @@ class DocumentUploadManager:
 
     @staticmethod
     def public_record(record: dict) -> dict:
-        return {k: record.get(k) for k in (
+        public = {k: record.get(k) for k in (
             "document_id", "job_id", "tenant", "owner", "filename", "size", "sha256",
             "source_format", "access_scope", "groups", "status", "stage", "chunk_count",
             "parser_batch_id", "error_code",
             "job_status", "attempts", "max_attempts", "worker_id", "celery_task_id",
             "created_at", "updated_at", "started_at", "heartbeat_at", "finished_at")}
+        if "idempotency_replayed" in record:
+            public["idempotency_replayed"] = bool(record["idempotency_replayed"])
+        return public

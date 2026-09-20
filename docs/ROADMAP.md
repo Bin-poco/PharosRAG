@@ -11,6 +11,12 @@
 - ✅ **可靠摄取任务**：PostgreSQL 保存文档/任务/Outbox，Redis + Celery 异步执行；支持指数退避、
   Worker 心跳、失联恢复、租约防旧 Worker 覆盖，以及保留历史的人工重试。设计和故障演练见
   [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
+- ✅ **上传幂等**：客户端可复用 `Idempotency-Key` 安全重试；服务端按 tenant + owner 隔离，使用
+  请求指纹识别冲突，并由数据库唯一索引保证并发请求只创建一份文档、任务和 Outbox。
+- ✅ **有界答案续写**：生成达到 `max_tokens` 后最多续写指定次数，Agent 续写计入总 LLM 调用预算；
+  最终仍截断时显式返回 `truncated` 和提示，不把半截答案伪装成完整答案。
+- ✅ **per-key 令牌桶限流**：鉴权成功后按 key 独立计数，超限返回结构化 429 和 `Retry-After`；
+  默认关闭，可按部署负载启用。目前只在单进程内生效，多副本全局配额仍需网关或共享后端。
 - ✅ **轻量 Web UI**：Next.js 前端已覆盖 API Key 登录、Direct/Auto/Agent 问答、引用与 trace、
   检索实验、Markdown/PDF 上传、任务状态和文档生命周期管理；前端 lint/build 已纳入 CI。
 - ✅ **Agent V2 配对评测**：32 题、三模式、96 次真实运行已完成；记录程序化契约、引用来源组、
@@ -23,8 +29,8 @@
   指标落盘(或接 Prometheus)+ 日志滚动。先观察实际增长速率再决定重量级。
 - **P1 密钥吊销审计**:keys 文件编辑 + restart 即吊销,但无"谁在何时被吊销"的审计线索。加一条
   吊销日志 + `pharos keys list/revoke` 子命令。
-- **P2 per-key 速率限制**:当前无限流,吞吐天花板 ~3.2 req/s 下单个重度用户可饿死他人。按 key
-  令牌桶,超限返回结构化 `rate_limited`。
+- **P2 跨副本全局配额**:单进程 per-key 令牌桶已交付；多副本场景若需要严格共享配额，接网关或
+  Redis 原子桶，不能把各副本本地桶误当全局限流。
 - **P2 扩展 Office 上传**：当前 HTTP 上传支持 Markdown/PDF；下一步可把 DOCX/XLSX 标准化接入同一
   可靠任务管道，并补 MIME 嗅探、配额和对象存储，避免应用节点共享本地上传目录。
 - **P2 表格向检索**:表格题当前 检索 0.750 / 正确 0.688(88 题基线);4 个检索 miss + 2 个大表读数错

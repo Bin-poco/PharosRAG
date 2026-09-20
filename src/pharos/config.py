@@ -131,6 +131,8 @@ class PharosConfig:
     port: int = 8787
     api_key: str = ""            # legacy 单密钥模式(单人门槛)
     keys_file: str = ""          # keys 模式(团队,D10):JSON 文件路径,配了即启用多身份
+    rate_limit_rps: float = 0.0  # 每 key 每秒补充令牌数；0=关闭(本地默认)
+    rate_limit_burst: int = 10   # 每 key 突发容量；限流为单进程，不跨副本共享
     log_dir: str = ""            # 请求日志目录(D11);空=关
     log_queries: bool = True     # 日志是否含 query 文本(截断;内网默认开)
     max_context_tokens: int = 12000
@@ -144,6 +146,8 @@ class PharosConfig:
     llm_model: str = "deepseek-v4-flash"
     llm_api_key_env: str = "DEEPSEEK_API_KEY"
     llm_max_tokens: int = 2000
+    # 单次回答因 finish_reason=length 触发的最大续写次数；0=只透出截断，不自动续写。
+    llm_max_continuations: int = 1
     # Agentic RAG 请求级硬预算。默认保守，先用评估集证明收益后再放宽。
     agent_max_steps: int = 10
     agent_max_retrievals: int = 3
@@ -202,6 +206,8 @@ def from_env() -> PharosConfig:
         port=_int_env("PHAROS_PORT", 8787),
         api_key=os.environ.get("PHAROS_API_KEY", "").strip(),
         keys_file=os.path.expanduser(os.environ.get("PHAROS_KEYS_FILE", "").strip()),
+        rate_limit_rps=_float_env("PHAROS_RATE_LIMIT_RPS", 0.0),
+        rate_limit_burst=_int_env("PHAROS_RATE_LIMIT_BURST", 10),
         log_dir=os.path.expanduser(os.environ.get("PHAROS_LOG_DIR", "~/pharos_logs").strip()),
         log_queries=os.environ.get("PHAROS_LOG_QUERIES", "on").strip().lower() not in ("off", "0", "false"),
         smart_ask=os.environ.get("PHAROS_SMART_ASK", "on").strip().lower() not in ("off", "0", "false"),
@@ -211,6 +217,7 @@ def from_env() -> PharosConfig:
         llm_model=os.environ.get("PHAROS_LLM_MODEL", "deepseek-v4-flash"),
         llm_api_key_env=os.environ.get("PHAROS_LLM_API_KEY_ENV", "DEEPSEEK_API_KEY"),
         llm_max_tokens=_int_env("PHAROS_LLM_MAX_TOKENS", 2000),
+        llm_max_continuations=_int_env("PHAROS_LLM_MAX_CONTINUATIONS", 1),
         agent_max_steps=_int_env("PHAROS_AGENT_MAX_STEPS", 10),
         agent_max_retrievals=_int_env("PHAROS_AGENT_MAX_RETRIEVALS", 3),
         agent_max_llm_calls=_int_env("PHAROS_AGENT_MAX_LLM_CALLS", 4),

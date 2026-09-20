@@ -11,7 +11,7 @@ import re
 from chunker.core import est_tokens
 from .llm import LLMClient
 from .prompt import CITE_RE, PromptBuilder
-from .types import Answer, Citation
+from .types import Answer, Citation, Message
 
 
 def _norm(s: str) -> str:
@@ -20,7 +20,7 @@ def _norm(s: str) -> str:
 
 class Generator:
     def __init__(self, retriever, llm: LLMClient, prompt_builder: PromptBuilder | None = None, acl_check=None,
-                 max_context_tokens: int | None = None):
+                 max_context_tokens: int | None = None, max_continuations: int = 0):
         self.retriever = retriever
         self.llm = llm
         self.pb = prompt_builder or PromptBuilder()
@@ -31,6 +31,8 @@ class Generator:
         # 与工具面 PHAROS_MAX_CONTEXT_TOKENS(toolcore,管检索交付)语义不同:这个管喂进 LLM 的 prompt
         # —— 换 8k/32k 小上下文后端时防超窗 400 / 后端静默截掉 SYSTEM。
         self.max_context_tokens = max_context_tokens
+        # finish_reason=length 时的有限续写次数。默认 0 保持底层类兼容；生产装配通过配置开启。
+        self.max_continuations = max(0, max_continuations)
 
     def answer(self, query: str, user, top_k=None, rerank: bool = False,
                doc_ids=None, doc_type=None, kind=None, strategy=None, extra_legs=None,
@@ -138,17 +140,44 @@ class Generator:
             results, user, max_context_tokens=max_context_tokens)
         return self.answer_from_contexts(query, contexts, meta)
 
-    def answer_from_contexts(self, query: str, contexts: list[dict], meta: list[dict]) -> Answer:
+    def answer_from_contexts(self, query: str, contexts: list[dict], meta: list[dict],
+                             max_generation_calls: int | None = None) -> Answer:
         """使用已通过 ACL/预算处理的证据生成带引用答案。"""
         messages = self.pb.build(query, contexts)
         if not contexts:   # R3.E:零召回 -> 确定性返回"信息不足",不把作答权交给 LLM(grounding 退路不再靠模型听话)
             return Answer(text="I don't have enough information in the provided context to answer.",
                           citations=[], n_contexts=0, finish_reason=None, raw_messages=messages)
         raw = self.llm.complete(messages)
-        # finish_reason 在 complete 返回后**立即快照**进 Answer:llm 实例属性会被后续调用覆盖
-        # (smart-ask 重试被弃用时实例上残留的是被丢弃那轮的值),事后读必错位。
+        generation_calls = 1
+        continuations = 0
+        # finish_reason 在每次 complete 返回后立即快照；实例属性会被下一次续写或其它请求覆盖。
+        finish_reason = getattr(self.llm, "last_finish_reason", None)
+        call_cap = max_generation_calls if max_generation_calls is not None else 1 + self.max_continuations
+        call_cap = max(1, call_cap)
+        continuation_messages = list(messages)
+        last_piece = raw
+        while (finish_reason == "length" and continuations < self.max_continuations
+               and generation_calls < call_cap):
+            continuation_messages.extend([
+                # 把已生成部分放回 assistant 历史，模型才能从断点续写而不是重新回答。
+                Message(role="assistant", content=last_piece),
+                Message(
+                    role="user",
+                    content=("Continue exactly where the previous answer was cut off. "
+                             "Do not repeat earlier content or add a new preamble. "
+                             "Use only the evidence already provided and preserve [cite:n] citations."),
+                ),
+            ])
+            piece = self.llm.complete(continuation_messages)
+            generation_calls += 1
+            continuations += 1
+            finish_reason = getattr(self.llm, "last_finish_reason", None)
+            raw = raw.rstrip() + "\n" + piece.lstrip()
+            last_piece = piece
+
         return Answer(text=raw, citations=self._parse_citations(raw, meta), n_contexts=len(contexts),
-                      finish_reason=getattr(self.llm, "last_finish_reason", None), raw_messages=messages)
+                      finish_reason=finish_reason, raw_messages=messages,
+                      generation_calls=generation_calls, continuations=continuations)
 
     @staticmethod
     def _parse_citations(answer_text: str, meta: list[dict]) -> list[Citation]:

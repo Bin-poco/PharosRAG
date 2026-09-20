@@ -57,6 +57,35 @@ def test_sql_repository_persists_document_job_and_outbox(tmp_path):
     assert reopened.get_job("job_db1")["owner"] == "alice"
 
 
+def test_sql_repository_upload_idempotency_replays_or_conflicts(tmp_path):
+    repository = SQLJobRepository(f"sqlite:///{tmp_path / 'jobs.db'}", create_schema=True)
+    first_record = {
+        **_record(),
+        "idempotency_key": "upload-key-1",
+        "idempotency_fingerprint": "f" * 64,
+    }
+    first = repository.create(first_record)
+
+    duplicate = {
+        **first_record,
+        "document_id": "upload__db2",
+        "job_id": "job_db2",
+        "source_path": "/data/uploads/upload__db2/source.md",
+    }
+    replayed = repository.create(duplicate)
+
+    assert first["idempotency_replayed"] is False
+    assert replayed["idempotency_replayed"] is True
+    assert replayed["document_id"] == "upload__db1"
+    with Session(repository.engine) as session:
+        assert session.scalar(select(func.count()).select_from(DocumentRow)) == 1
+        assert session.scalar(select(func.count()).select_from(OutboxRow)) == 1
+
+    with pytest.raises(UploadError) as exc:
+        repository.create({**duplicate, "idempotency_fingerprint": "x" * 64})
+    assert exc.value.code == "idempotency_conflict"
+
+
 def test_sql_repository_claim_is_single_owner_and_tracks_terminal_state(tmp_path):
     url = f"sqlite:///{tmp_path / 'jobs.db'}"
     first = SQLJobRepository(url, create_schema=True)

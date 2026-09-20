@@ -11,11 +11,18 @@ tenant/principals 传给引擎 ACL(决定"能看什么");未知/缺失 key → `
 模式下需 **admin** key(否则 `403`)。上传需 `uploader` role 或 admin;服务端自动把
 `user:<name>` 加入该身份的检索 principals，用于“仅上传者可见”。
 
+可通过 `PHAROS_RATE_LIMIT_RPS`（每秒令牌数，默认 0=关闭）和 `PHAROS_RATE_LIMIT_BURST`
+（突发容量，默认 10）开启鉴权后的 per-key 令牌桶。超限返回 HTTP `429`：
+`{"status":"rate_limited","retriable":true,"retry_after":N,"hint":"…"}`，并带 `Retry-After: N`。
+`/healthz`、`/readyz` 免限流；open 模式无 key，暂不应用此策略。桶只保存加盐哈希，不存原始 key。
+当前是**单进程**限流：多副本各自计数，不能将它当作全局配额；全局配额需共享存储或网关。
+
 ## 通用约定
 
 - **检索/问答领域结果 HTTP 200 + `status` 字段**(客户端按状态机决策);上传接口按 REST 语义
   返回 `202/400/403/413/415/503`。其余 HTTP 码:
-  `401`(鉴权失败)、`403`(stats 非 admin)、`422`(请求体不是合法 JSON/字段类型错)、`5xx`(崩溃)。
+  `401`(鉴权失败)、`403`(stats 非 admin)、`429`(per-key 限流)、
+  `422`(请求体不是合法 JSON/字段类型错)、`5xx`(崩溃)。
 - **status 状态机**(与引擎 toolcore 契约一致):`ok` / `empty` / `no_identity` / `empty_query` /
   `bad_arg` / `no_access`(无权与不存在同响应,不泄存在性)/ `config_error`(sidecar 需重建)/
   `backend_unavailable`(retriable)/ `contract_mismatch`(MCP 适配器专属:守护进程返回非 401 的
@@ -61,14 +68,18 @@ agent 使用契约全文(与 MCP instructions 同源):`{status, instructions}`
 {"status":"ok", "answer":"…带 [cite:n] 的答案…",
  "citations":[{"marker":1,"chunk_id":"…#0062","doc_id":"…","title":"…","section":"…","page":18,
                "text":"(仅 include_contexts=true)"}],
- "n_contexts":5, "model":"deepseek-v4-flash", "finish_reason":"stop|length|…"}
+ "n_contexts":5, "model":"deepseek-v4-flash", "finish_reason":"stop|length|…",
+ "truncated":false, "generation_calls":2, "continuations":1}
 ```
-`finish_reason=length` = 答案被 max_tokens 截断(尾部引用可能被切)。该值与 `answer` **同轮快照**
-(smart-ask 重试被弃用时是第一轮的值,不是被丢弃那轮的);零召回不调 LLM 时为 `null`。
+单次生成被 `max_tokens` 截断时，服务默认最多续写一次（`PHAROS_LLM_MAX_CONTINUATIONS`，设 0 关闭），
+续写只沿用同一批证据和引用编号。Agent 模式的续写也计入 `PHAROS_AGENT_MAX_LLM_CALLS` 硬预算。
+`generation_calls` 是本次答案的生成调用数（不含 Agent 证据判断），`continuations` 是续写次数。
+若最终仍为 `finish_reason=length`，`truncated=true`，`hints` 会说明答案未完；不能把它当完整答案。
+结束原因与 `answer` **同轮快照**（smart-ask 重试被弃用时是第一轮的值）；零召回不调 LLM 时为 `null`。
 
 smart-ask(默认开,`PHAROS_SMART_ASK=off` 关;设计见 DESIGN D9):响应另含
 `auto: ["table_leg_retry"?]`(自动动作留痕——数值题第一轮拒答时带 kind=table 补检腿重问一轮)与
-`hints: [...]`(仅当最终答案仍为拒答/部分拒答时,≤3 条可操作建议;正常答案为空数组)。
+`hints: [...]`(拒答/部分拒答时给可操作建议；答案仍截断时另给预算提示；完整正常答案为空数组)。
 smart-ask 属于 `direct` 路径；Agent 路径由自己的证据循环决定是否补检。
 
 当 `mode=agent|auto` 时，响应额外包含：
@@ -129,6 +140,11 @@ tenant/owner 只取 `X-API-Key` 解析出的身份，客户端无参数可覆盖
   "access_scope": "private"
 }
 ```
+
+客户端应为一次逻辑上传生成 `Idempotency-Key` 请求头（1–128 位字母、数字或 `._:-`），网络超时后
+重试时复用同一个值。同一 tenant、同一上传者下，同键同文件及同权限会返回原来的
+`document_id/job_id`，并带 `idempotency_replayed=true`，不会重复投递任务；同键但文件或权限不同
+返回 `409 idempotency_conflict`。不传该头时保留每次创建新文档的兼容行为。
 
 Markdown 在本地标准化；PDF 使用 MinerU 精准解析 API(`vlm`)提取正文、标题层级、页码、表格和
 图片，再进入同一条切块/建库链。PDF 需在服务环境中配置 `MINERU_TOKEN_A`，也可通过

@@ -59,7 +59,8 @@ def build_generator(retriever, cfg):
                               max_tokens=cfg.llm_max_tokens)
     # PHAROS_ASK_MAX_CONTEXT_TOKENS(0=不限)→ 闭管道 context 总量软预算(换小上下文 LLM 后端时防超窗 400)
     return Generator(retriever, llm, acl_check=acl_admits,
-                     max_context_tokens=cfg.ask_max_context_tokens or None)
+                     max_context_tokens=cfg.ask_max_context_tokens or None,
+                     max_continuations=max(0, getattr(cfg, "llm_max_continuations", 1)))
 
 
 def build_agentic_runner(generator, cfg) -> AgenticRunner:

@@ -317,6 +317,7 @@ def test_ask_max_context_tokens_env_to_generator(monkeypatch):
         build_generator(None, make_cfg())                      # 默认 0 -> None(行为完全不变)
     assert MockGen.call_args_list[0].kwargs.get("max_context_tokens") == 6000
     assert MockGen.call_args_list[1].kwargs.get("max_context_tokens") is None
+    assert MockGen.call_args_list[0].kwargs.get("max_continuations") == 1
 
 
 # ---------- 阶段F 审查:P2-3 服务端 /rerank 消费客户端 instruction(收敛"客户端唯一真相")----------
