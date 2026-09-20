@@ -13,6 +13,7 @@ from .remote import make_dense
 from .sparse import query_sparse
 from .store import Store
 from .types import User
+from rag_runtime.deadline import DeadlineExceeded, check_deadline
 
 
 class SearchResults(list):
@@ -100,7 +101,9 @@ class Retriever:
         """召回(已过 ACL 硬过滤)。rerank=True:多召回 rerank_top_n -> cross-encoder 精排 -> 取 top_k。
         可选过滤(3.A/3.F):doc_ids/doc_type/kind 与 ACL AND。strategy(4.A):hybrid/dense/sparse 选路。
         rerank_top_n(4.B):精排候选池深度(默认 cfg.rerank_top_n,带护栏);rerank 失败 -> 降级返回 hybrid 召回(不崩)。"""
+        check_deadline()
         qd = self.dense.encode_query(query)
+        check_deadline()
         qs = query_sparse(query, self.cfg.stopwords)         # query 端 values=1.0;无有效 token -> None
         # Batch1.C:`top_k or cfg.top_k` 是 0-falsy bug(top_k=0 静默变默认、负数切错子集)。显式 is None + clamp。
         k = self.cfg.top_k if top_k is None else int(top_k)
@@ -111,7 +114,10 @@ class Retriever:
             n = max(rtn, k)                     # 召回至少 k 个供精排,否则 top_k>候选池时反而少给(review#4)
             hits = self.store.hybrid_search(qd.tolist(), qs, user, top_k=n, **flt)
             try:
+                check_deadline()
                 return self._get_reranker().rerank(query, hits, top_k=k)
+            except DeadlineExceeded:
+                raise
             except Exception:                   # 4.B:rerank 失败(OOM/模型缺失)-> 降级返回 hybrid 召回,不让精排拖垮基础检索
                 return hits[:k]                 # 返回的 hit score_kind 仍为 hybrid 量纲 -> _build 据此标 rerank_degraded
         return self.store.hybrid_search(qd.tolist(), qs, user, top_k=k, **flt)
@@ -262,17 +268,23 @@ class Retriever:
                        rerank: bool = False) -> dict:
         """跨文档分组检索(3.G):对每个 doc_id 各取 top_k,返回 {doc_id: [Hit]}。对比/汇总类任务用。
         B3 review:query 只编码一次复用(避免 len(doc_ids) 次 8B 前向放大成本)。"""
+        check_deadline()
         qd = self.dense.encode_query(query).tolist()
+        check_deadline()
         qs = query_sparse(query, self.cfg.stopwords)
         k = max(1, min(int(top_k), self.cfg.prefetch_limit))
         # R2#7:rerank 候选池深度须与 search() 同口径 clamp 到 [1,prefetch_limit](否则 cfg.rerank_top_n 过大时超候选并集)
         rtn = max(1, min(int(self.cfg.rerank_top_n), self.cfg.prefetch_limit))
         out = {}
         for d in doc_ids:
+            check_deadline()
             if rerank:
                 hits = self.store.hybrid_search(qd, qs, user, top_k=max(rtn, k), doc_ids=[d])
                 try:
+                    check_deadline()
                     out[d] = self._get_reranker().rerank(query, hits, top_k=k)
+                except DeadlineExceeded:
+                    raise
                 except Exception:                        # R4.E:与 search() 同款优雅降级 —— reranker OOM/缺失退回 hybrid 召回,
                     out[d] = hits[:k]                     # 不让一个 doc 的精排失败崩掉整组分组检索(降级 hit 仍是 hybrid 量纲)
             else:

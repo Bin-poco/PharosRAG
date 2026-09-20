@@ -17,6 +17,7 @@ from qdrant_client import QdrantClient, models
 from .acl import acl_admits
 from .config import EmbedConfig
 from .types import Hit, User
+from rag_runtime.deadline import check_deadline
 
 
 class Store:
@@ -104,6 +105,7 @@ class Store:
         # should(实测 diag_acl),只 prefetch-level filter 才让 should 生效;顶层 query_filter 双保险。单路直查无 fusion
         # 不踩此坑,且出口 acl_admits 复核兜底。
         with self._lock:                                 # M1:Qdrant client 前向串行(dense_vec 是入参,encode 已在锁外算完)
+            check_deadline()  # 等待 client 锁期间可能耗尽请求预算。
             if strategy == "dense":
                 res = self.client.query_points(c.collection, query=dense_vec, using="dense",
                                                query_filter=acl, limit=limit, with_payload=True).points

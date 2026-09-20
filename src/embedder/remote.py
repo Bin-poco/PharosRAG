@@ -29,6 +29,9 @@ from .config import EmbedConfig
 from .dense import Dense
 from .errors import InferenceUnavailable
 from .rerank import Reranker
+from rag_runtime.deadline import (
+    DeadlineExceeded, check_deadline, remaining_seconds, retry_sleep,
+)
 
 # 模块级 client 缓存:同一 inference_url 的 dense+reranker **共用一个连接池**(避免双连接池浪费)。
 # 进程级单例,atexit 统一 close。审查 S3/P3:并发构造 Remote* 时 check-then-set 有竞态
@@ -83,7 +86,8 @@ def _post_retry(client, cfg: EmbedConfig, path: str, payload: dict) -> dict:
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            r = client.post(path, json=payload)
+            r = client.post(path, json=payload, **_deadline_timeout(cfg))
+            check_deadline()
             if r.status_code >= 500:                       # 5xx 皆瞬态 -> 可重试
                 last = InferenceUnavailable(f"推理服务 {r.status_code} @ {path}")
             else:
@@ -92,8 +96,19 @@ def _post_retry(client, cfg: EmbedConfig, path: str, payload: dict) -> dict:
         except httpx.TransportError as e:                  # 连接被拒/断连(RST·keep-alive 复用死连接)+ 全部超时
             last = InferenceUnavailable(f"推理服务 {type(e).__name__} @ {path}")
         if attempt < retries:                              # 还有重试机会 -> 指数退避
-            time.sleep(cfg.inference_backoff * (2 ** attempt))
+            retry_sleep(cfg.inference_backoff * (2 ** attempt))
     raise last                                             # 重试耗尽(last 必为 InferenceUnavailable)
+
+
+def _deadline_timeout(cfg: EmbedConfig) -> dict:
+    import httpx
+    remaining = remaining_seconds()
+    if remaining is None:
+        return {}
+    return {"timeout": httpx.Timeout(
+        connect=min(remaining, cfg.inference_connect_timeout),
+        read=min(remaining, cfg.inference_timeout),
+        write=min(remaining, 10.0), pool=min(remaining, 5.0))}
 
 
 class RemoteDense(Dense):
@@ -124,10 +139,13 @@ class RemoteDense(Dense):
             if self._handshake_done:
                 return
             try:
-                r = self._client.get("/healthz")
+                r = self._client.get("/healthz", **_deadline_timeout(self.cfg))
+                check_deadline()
                 if r.status_code != 200:
                     return
                 data = r.json()
+            except DeadlineExceeded:
+                raise
             except Exception:                   # 不可达/非 JSON:不阻断,交给业务请求的重试链
                 return
             model, full_dim = data.get("model_dense"), data.get("full_dim")

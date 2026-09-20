@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from rag_runtime.deadline import check_deadline, remaining_seconds
+
 import os
 import re
 from typing import Protocol
@@ -63,6 +65,7 @@ class OpenAICompatibleLLM:
         self.reasoning_effort = reasoning_effort
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.timeout = timeout
         # R3.C:thinking 是 DeepSeek 专有 extra_body 字段;原生 OpenAI/多数 vLLM/其它兼容代理对未知 body 字段会 400。
         # 故只对 DeepSeek 系后端注入(可显式 send_thinking= 覆盖),保住"OpenAI 兼容通吃"契约。
         # 自动判定看 base_url **或 model 名**:公司网关代理场景 URL 无 "deepseek" 子串但 model 名通常仍带
@@ -78,9 +81,13 @@ class OpenAICompatibleLLM:
             extra["thinking"] = {"type": "enabled" if self.thinking else "disabled"}
             if self.thinking and self.reasoning_effort:
                 extra["reasoning_effort"] = self.reasoning_effort
-        resp = self._client.chat.completions.create(
+        remaining = remaining_seconds()
+        client = (self._client.with_options(timeout=min(self.timeout, remaining), max_retries=0)
+                  if remaining is not None else self._client)
+        resp = client.chat.completions.create(
             model=self.model, messages=messages_to_dicts(messages),
             max_tokens=self.max_tokens, temperature=self.temperature, extra_body=extra or None)
+        check_deadline()  # 过期答案不能更新请求状态，也不能触发下一轮补检。
         # R3.F:内容审查命中/上游异常可能被包成 choices=[]/None -> 明确报错,不 IndexError、不静默空答(与"模型正常答空"区分)
         choice = resp.choices[0] if getattr(resp, "choices", None) else None
         if choice is None:

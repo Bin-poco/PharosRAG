@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from generator import Answer, Message, is_refusal
+from rag_runtime.deadline import Deadline, DeadlineExceeded
 
 
 log = logging.getLogger(__name__)
@@ -253,6 +254,8 @@ class AgenticRunner:
             raise ValueError("AgenticRunner mode 必须是 agent|auto")
 
         started = time.monotonic()
+        deadline = Deadline(self.limits.timeout_seconds)
+        timed_out = False
         trace: list[dict[str, Any]] = []
         route_reasons: list[str] = []
         retrievals = 0
@@ -267,7 +270,8 @@ class AgenticRunner:
             return time.monotonic() - started
 
         def can_step() -> bool:
-            return len(trace) < self.limits.max_steps and elapsed() < self.limits.timeout_seconds
+            return (not timed_out and len(trace) < self.limits.max_steps
+                    and elapsed() < self.limits.timeout_seconds)
 
         def add_trace(action: str, **fields) -> bool:
             if len(trace) >= self.limits.max_steps:
@@ -279,10 +283,10 @@ class AgenticRunner:
             nonlocal retrievals
             if (not can_step() or retrievals >= self.limits.max_retrievals):
                 return -1
-            rows = self.generator.retrieve(
-                search_query, user, top_k=top_k, rerank=rerank,
-                doc_ids=doc_ids, doc_type=doc_type, kind=kind, strategy=strategy)
             retrievals += 1
+            rows = deadline.call(lambda: self.generator.retrieve(
+                search_query, user, top_k=top_k, rerank=rerank,
+                doc_ids=doc_ids, doc_type=doc_type, kind=kind, strategy=strategy))
             added = 0
             for row in rows:
                 cid = str(getattr(row.get("hit"), "chunk_id", ""))
@@ -294,17 +298,18 @@ class AgenticRunner:
             return added
 
         def safe_contexts() -> tuple[list[dict], list[dict]]:
-            return self.generator.prepare_contexts(merged, user)
+            return deadline.call(lambda: self.generator.prepare_contexts(merged, user))
 
         def generate(contexts: list[dict], meta: list[dict], *, outcome: str) -> Answer:
             nonlocal llm_calls
+            deadline.remaining()
             if contexts:
                 if llm_calls >= self.limits.max_llm_calls or not can_step():
                     add_trace("stop", reason=("timeout" if elapsed() >= self.limits.timeout_seconds
                                                else "llm_budget_exhausted"))
                     return Answer(text=_REFUSAL, citations=[], n_contexts=0)
                 llm_calls += 1
-            answer = self.generator.answer_from_contexts(query, contexts, meta)
+            answer = deadline.call(lambda: self.generator.answer_from_contexts(query, contexts, meta))
             add_trace("answer", outcome=outcome, n_contexts=answer.n_contexts,
                       refusal=is_refusal(answer.text))
             return answer
@@ -317,6 +322,17 @@ class AgenticRunner:
                 limits=self.limits, degraded=degraded,
                 evidence_chunk_ids=[str(row["hit"].chunk_id) for row in merged])
 
+        def timeout_result() -> AgentRun:
+            nonlocal timed_out, degraded
+            timed_out = degraded = True
+            stop = {"step": min(len(trace) + 1, self.limits.max_steps),
+                    "action": "stop", "reason": "timeout"}
+            if not add_trace("stop", reason="timeout") and trace:
+                trace[-1] = stop
+            selected = next((s["selected_mode"] for s in reversed(trace)
+                             if s.get("action") == "route"), "agent")
+            return finish(Answer(_REFUSAL, [], 0), selected)
+
         def finish_with_available_evidence(reason: str) -> AgentRun:
             """Generate from accumulated evidence when another retrieval is impossible.
 
@@ -325,6 +341,7 @@ class AgenticRunner:
             normal generation prompt remains evidence-only and may decline unsupported parts;
             zero evidence still returns the deterministic refusal.
             """
+            deadline.remaining()
             contexts, meta = safe_contexts()
             # fallback 与 answer 各占一个 trace step。必须提前为两者都留出空间，
             # 否则会出现“记录了 grounded_generation，但 generate 随即因步数耗尽拒答”的半截状态。
@@ -337,84 +354,95 @@ class AgenticRunner:
             add_trace("stop", reason=reason)
             return finish(Answer(_REFUSAL, [], 0), "agent")
 
-        if mode == "agent":
-            route_reasons.append("forced_agent")
-            add_trace("route", requested_mode=mode, selected_mode="agent",
-                      reasons=list(route_reasons))
-
-        retrieve_one(query)
-
-        if mode == "auto":
-            if not merged:
-                route_reasons.append("zero_recall")
-                add_trace("route", requested_mode=mode, selected_mode="agent",
-                          reasons=list(route_reasons))
-            elif requires_agent(query):
-                route_reasons.append("complex_query")
-                add_trace("route", requested_mode=mode, selected_mode="agent",
-                          reasons=list(route_reasons))
-            else:
-                route_reasons.append("simple_query_with_evidence")
-                add_trace("route", requested_mode=mode, selected_mode="direct",
-                          reasons=list(route_reasons))
-                contexts, meta = safe_contexts()
-                initial_direct_answer = generate(contexts, meta, outcome="direct")
-                if not is_refusal(initial_direct_answer.text):
-                    return finish(initial_direct_answer, "direct")
-                route_reasons.append("direct_refusal_escalation")
+        def execute():
+            nonlocal llm_calls, degraded, initial_direct_answer
+            if mode == "agent":
+                route_reasons.append("forced_agent")
                 add_trace("route", requested_mode=mode, selected_mode="agent",
                           reasons=list(route_reasons))
 
-        # Agent 循环：判断证据 -> 定向补检 -> 再判断。没有任意工具，也不能越过预算。
-        while can_step():
-            contexts, meta = safe_contexts()
-            if llm_calls >= self.limits.max_llm_calls:
-                add_trace("stop", reason="llm_budget_exhausted")
-                return finish(initial_direct_answer or Answer(_REFUSAL, [], 0), "agent")
-            try:
-                llm_calls += 1
-                decision = self.controller.assess(query, contexts, attempted)
-            except Exception as exc:
-                degraded = True
-                # 控制器只是增强路径：格式错误、超时或上游异常都降级到已有闭管道。
-                # 不把第三方异常正文写进 trace，避免把密钥、URL 等内部信息返回给客户端。
-                if isinstance(exc, ControllerOutputError):
-                    reason = str(exc)
-                    log.warning("Agent evidence controller contract invalid: %s", reason)
+            retrieve_one(query)
+
+            if mode == "auto":
+                if not merged:
+                    route_reasons.append("zero_recall")
+                    add_trace("route", requested_mode=mode, selected_mode="agent",
+                              reasons=list(route_reasons))
+                elif requires_agent(query):
+                    route_reasons.append("complex_query")
+                    add_trace("route", requested_mode=mode, selected_mode="agent",
+                              reasons=list(route_reasons))
                 else:
-                    reason = "controller_unavailable"
-                    log.exception("Agent evidence controller unavailable")
-                add_trace("fallback", reason=reason, action_taken="direct_generation")
-                if initial_direct_answer is not None:
-                    return finish(initial_direct_answer, "agent")
+                    route_reasons.append("simple_query_with_evidence")
+                    add_trace("route", requested_mode=mode, selected_mode="direct",
+                              reasons=list(route_reasons))
+                    contexts, meta = safe_contexts()
+                    initial_direct_answer = generate(contexts, meta, outcome="direct")
+                    if not is_refusal(initial_direct_answer.text):
+                        return finish(initial_direct_answer, "direct")
+                    route_reasons.append("direct_refusal_escalation")
+                    add_trace("route", requested_mode=mode, selected_mode="agent",
+                              reasons=list(route_reasons))
+
+            # Agent 循环：判断证据 -> 定向补检 -> 再判断。没有任意工具，也不能越过预算。
+            while can_step():
                 contexts, meta = safe_contexts()
-                return finish(generate(contexts, meta, outcome="controller_fallback"), "agent")
+                if llm_calls >= self.limits.max_llm_calls:
+                    add_trace("stop", reason="llm_budget_exhausted")
+                    return finish(initial_direct_answer or Answer(_REFUSAL, [], 0), "agent")
+                try:
+                    llm_calls += 1
+                    decision = deadline.call(lambda: self.controller.assess(query, contexts, attempted))
+                except DeadlineExceeded:
+                    raise
+                except Exception as exc:
+                    degraded = True
+                    # 控制器只是增强路径：格式错误、超时或上游异常都降级到已有闭管道。
+                    # 不把第三方异常正文写进 trace，避免把密钥、URL 等内部信息返回给客户端。
+                    if isinstance(exc, ControllerOutputError):
+                        reason = str(exc)
+                        log.warning("Agent evidence controller contract invalid: %s", reason)
+                    else:
+                        reason = "controller_unavailable"
+                        log.exception("Agent evidence controller unavailable")
+                    add_trace("fallback", reason=reason, action_taken="direct_generation")
+                    if initial_direct_answer is not None:
+                        return finish(initial_direct_answer, "agent")
+                    contexts, meta = safe_contexts()
+                    return finish(generate(contexts, meta, outcome="controller_fallback"), "agent")
 
-            if not contexts and decision.sufficient:
-                decision = EvidenceDecision(False, "no_evidence", ["knowledge_base_evidence"],
-                                            decision.next_queries)
-            add_trace("grade", sufficient=decision.sufficient,
-                      reason_code=decision.reason_code, missing=decision.missing,
-                      next_queries=decision.next_queries)
-            if decision.sufficient:
-                return finish(generate(contexts, meta, outcome="evidence_sufficient"), "agent")
+                if not contexts and decision.sufficient:
+                    decision = EvidenceDecision(False, "no_evidence", ["knowledge_base_evidence"],
+                                                decision.next_queries)
+                add_trace("grade", sufficient=decision.sufficient,
+                          reason_code=decision.reason_code, missing=decision.missing,
+                          next_queries=decision.next_queries)
+                if decision.sufficient:
+                    return finish(generate(contexts, meta, outcome="evidence_sufficient"), "agent")
 
-            fresh_queries = [q for q in decision.next_queries
-                             if q not in attempted and q.strip()]
-            if not fresh_queries:
-                return finish_with_available_evidence("no_new_query")
+                fresh_queries = [q for q in decision.next_queries
+                                 if q not in attempted and q.strip()]
+                if not fresh_queries:
+                    return finish_with_available_evidence("no_new_query")
 
-            searched = False
-            for next_query in fresh_queries[:self.limits.max_subqueries]:
-                if retrievals >= self.limits.max_retrievals or not can_step():
-                    break
-                attempted.append(next_query)
-                retrieve_one(next_query)
-                searched = True
-            if not searched:
-                return finish_with_available_evidence(
-                    "timeout" if elapsed() >= self.limits.timeout_seconds
-                    else "retrieval_budget_exhausted")
+                searched = False
+                for next_query in fresh_queries[:self.limits.max_subqueries]:
+                    if retrievals >= self.limits.max_retrievals or not can_step():
+                        break
+                    attempted.append(next_query)
+                    retrieve_one(next_query)
+                    searched = True
+                if not searched:
+                    return finish_with_available_evidence(
+                        "timeout" if elapsed() >= self.limits.timeout_seconds
+                        else "retrieval_budget_exhausted")
 
-        # trace 已达上限时不能再追加 stop；响应 budget 会明确显示 steps==max_steps。
-        return finish(Answer(_REFUSAL, [], 0), "agent")
+            if elapsed() >= self.limits.timeout_seconds:
+                raise DeadlineExceeded("request_deadline_exceeded")
+            # trace 已达上限时不能再追加 stop；响应 budget 会明确显示 steps==max_steps。
+            return finish(Answer(_REFUSAL, [], 0), "agent")
+
+        try:
+            return execute()
+        except DeadlineExceeded:
+            return timeout_result()
