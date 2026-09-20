@@ -15,7 +15,7 @@
 服务面覆盖:多身份鉴权(keys 模式,§D10)、请求日志与指标(§D11)、systemd 托管、备份恢复。
 
 **非目标**(明确不做,理由见 [ROADMAP.md](ROADMAP.md)):HTTPS/公网终结(内网信任边界 + key,要远程走隧道)、
-SSO/OIDC、解析编排(MinerU 调用在本仓 `scripts/`)、前端 UI。
+SSO/OIDC。前端 UI 与可靠解析编排已在后续迭代中交付。
 （原非目标"水平扩展/多副本"已在阶段 A–F 交付:拆 GPU 推理层 + 应用脱 torch + Qdrant server + nginx 多副本,
 见 [SCALE_OUT.md](SCALE_OUT.md)。⚠ 下方 D1 "Qdrant server 换 url 即可"是**仅配置面**的简化——实际还需 store 三分支 + 全出口透传 + 数据迁移 + server-mode ACL 越权重测。）
 
@@ -164,7 +164,7 @@ mode/strategy 等枚举校验故意**不在 pydantic 层做**(否则变 422),留
 
 | 风险 | 现状 | 缓解 |
 |---|---|---|
-| 守护进程单点(无多副本) | 当前规模可接受 | systemd 自愈 + 适配器结构化降级 + hint 指向恢复动作 |
+| 本地上传、sidecar 与请求内会话状态限制完全无状态扩容 | 当前已支持应用多副本与 Qdrant server，但共享本地文件和会话去重仍有边界 | 当前部署使用共享持久卷；规模需要时迁移对象存储并增加共享会话状态 |
 | 适配器与 stdio 直连契约漂移 | 合仓后为单仓结构化契约测试(适配器 vs `mcp_stdio` docstring 相等 + `_INSTRUCTIONS` 单一来源自 toolcore) | 一条 pytest 套件全绿才算过(基数见 [TESTING.md §1](TESTING.md));COMPONENT_NOTES 记录接缝 |
 | index 与 serve 抢锁 | 单客户端锁 | indexer 捕获锁错误给明确提示;文档要求先停 serve |
 | 端口暴露即数据暴露 | 默认 127.0.0.1 | PHAROS_API_KEY;公网/HTTPS 明确非目标 |

@@ -11,6 +11,8 @@
 - ✅ **可靠摄取任务**：PostgreSQL 保存文档/任务/Outbox，Redis + Celery 异步执行；支持指数退避、
   Worker 心跳、失联恢复、租约防旧 Worker 覆盖，以及保留历史的人工重试。设计和故障演练见
   [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
+- ✅ **轻量 Web UI**：Next.js 前端已覆盖 API Key 登录、Direct/Auto/Agent 问答、引用与 trace、
+  检索实验、Markdown/PDF 上传、任务状态和文档生命周期管理；前端 lint/build 已纳入 CI。
 
 ## 候选(按优先级)
 
@@ -35,7 +37,7 @@
   → 应用脱 torch → 嵌入式 Qdrant 转 server → nginx 多副本 + `docker kill` 无感。⚠ 订正原措辞"EmbedConfig 换 url
   即迁移"过度简化:实际还需 `store.py` 三分支 + 全出口透传 `qdrant_url` + 数据迁移 + **server-mode ACL 越权重测**。
   剩余 open:session 粘滞/共享去重、inference 换 vLLM(GPU 排队明显时)、K8s。
-- SSE/streaming ask;简单 Web UI。
+- SSE/streaming ask（只有真实长答案等待成为主要体验问题时再做）。
 
 ## 明确不做
 
