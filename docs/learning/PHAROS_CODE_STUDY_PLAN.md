@@ -2,17 +2,17 @@
 
 > 作用：固定学习顺序、记录完成情况，并让后续对话在上下文压缩后仍能准确续学。
 >
-> 学习原则：每次只学习一课；先读对应教学文档，再沿真实代码执行链阅读，最后做实验和小结。没有完成实验与复述，不勾选完成。
+> 学习原则：每次只学习一课；先读对应教学文档，再沿真实代码执行链阅读，最后做实验和小结。实验默认执行；学习者明确选择跳过时，必须在进度和小结中如实记录，不伪造实验结果。
 
 ## 0. 当前进度
 
-- 当前阶段：阶段二——索引侧：文档怎样进入知识库
-- 当前课程：`L05 Embedding、稀疏向量与 Qdrant 建库（进行中）`
-- 下一步：先梳理 `Chunk → Indexer → Embedder → Point → Qdrant` 总链路，再区分 dense、sparse 与 payload
-- 最近更新：2026-09-15
+- 当前阶段：阶段四——服务化与 Agentic RAG
+- 当前课程：`L11 身份认证、ACL 与会话隔离（待开始）`
+- 下一步：阅读 `docs/learning/04-acl-security.md`，再沿身份认证、ACL 下推和会话隔离跟踪一次请求
+- 最近更新：2026-09-20
 - 当前环境：Apple Silicon Mac + Docker Compose + Qdrant + 阿里云 Embedding/Rerank + DeepSeek
 - 当前知识库：37 篇固定版本官方技术文档
-- 当前验证：`/readyz`、`/v1/retrieve`、`/v1/ask` 和内置 Agentic RAG 正常；文档生命周期完成 Docker 实测；全量测试 332 passed、7 skipped
+- 当前验证：`/readyz`、`/v1/retrieve`、`/v1/ask` 和内置 Agentic RAG 已完成真实服务验证；文档生命周期完成 Docker 实测；2026-09-20 本地全量回归为 350 passed、12 skipped，前端 lint/build 通过
 
 ### 学习进度与开发进度不是一回事
 
@@ -20,9 +20,14 @@
 - `L02`：已完成配置、装配、核心数据结构和数据变化图的学习。
 - `L03`：已完成文档下载、Markdown/MinerU 解析路径、统一 Element 接缝和 metadata 学习。
 - `L04`：已完成标题树、结构化切块、资产块、元数据盖章与查询期 small-to-big 学习和实验。
-- `L05`：进行中；从一个 Chunk 怎样成为 Qdrant point 开始。
-- 文档上传、可靠异步任务和文档生命周期已经实现并合入 `main`，但安排到 `L15–L16` 再系统学习。
-- “代码已实现”只表示功能和测试完成；只有完成对应阅读、实验与复述，才表示“已经掌握”。
+- `L05`：已完成 Embedding、Sparse、Point 构造、Qdrant Collection 与写入链路；隔离建库实验按学习者选择跳过。
+- `L06`：已完成 Dense、Sparse、Hybrid、ACL 下推与 RRF 融合的代码和原理学习；对比实验按学习者选择跳过。
+- `L07`：已完成候选池、Rerank、section 去重、Sidecar 缓存与 small-to-big 上下文扩展；接口对比实验按学习者选择跳过。
+- `L08`：已完成 Prompt 组装、Grounding、防提示注入、引用解析、LLM 协议与 MockLLM 学习。
+- `L09`：已完成 FastAPI 应用工厂、中间件、健康探针、错误契约和可观测性学习；接口实验因 Docker 已关闭而跳过。
+- `L10`：已完成镜像与容器、Compose 网络、数据挂载、在线推理适配器、启动依赖和服务生命周期学习；故障与 reload 实验因 Docker 已关闭而跳过。
+- 文档上传、可靠异步任务和文档生命周期已经实现并合入 `main`，但安排到 `L14–L16` 再系统学习。
+- “代码已实现”只表示功能和测试完成；学习掌握情况以对应阅读、复述和记录为准，实验若明确跳过须单独注明。
 
 ### 已完成的准备工作
 
@@ -71,14 +76,15 @@
 阶段三：查询侧——答案怎样产生
   L06 混合检索 → L07 Rerank 与上下文扩展 → L08 生成、Grounding 与引用
 
-阶段四：产品与 Agent
-  L09 FastAPI 服务 → L10 Docker 与在线推理 → L11 ACL 与会话
-  → L12 MCP Agentic RAG → L13 评估与测试
+阶段四：服务、安全与 Agent
+  L09 FastAPI 服务 → L10 Docker 与在线推理 → L11 身份、ACL 与会话
+  → L12 MCP 工具面 → L13 有限步 Agentic RAG
 
-阶段五：把项目变成自己的
-  L14 用 Git 划清上游与个人改造 → L15 可靠异步上传
-  → L16 文档生命周期与并发一致性 → L17 可观察的 Agentic 工作流
-  → L18 简单前端 → L19 工程化、评估与部署 → L20 简历与面试复盘
+阶段五：个人新增能力与项目收口
+  L14 上传入口与解析 Pipeline → L15 PostgreSQL/Redis/Celery 异步任务
+  → L16 文档生命周期与并发一致性 → L17 Next.js 前端与 BFF
+  → L18 测试与 Agent 评测 → L19 可靠性、扩容与部署
+  → L20 Git 溯源、简历与面试复盘
 ```
 
 课程以“课”为单位，不按自然日强制推进。建议每课 60–120 分钟，每天最多两课。
@@ -226,17 +232,17 @@
 
 - 只保留一篇小文档，建一个实验 collection。
 - 查看文档产生的 chunk 数。
-- 确认每个 point 同时包含 dense、sparse 和 payload。
+- 确认普通文本 point 同时包含 dense、sparse 和 payload；`image_only` point 只有图片 dense 和 payload。
 
 **注意**：不要直接清空当前 `tech_docs`；实验应使用新 collection。
 
 **完成标准**：
 
-- [ ] 能解释 Embedding 的输入与 1024 维输出
-- [ ] 能解释 sparse 向量保存了什么
-- [ ] 能说清 Qdrant point 的 vector 与 payload
-- [ ] 能解释为什么建库和查询必须使用同一个 Embedding 模型
-- [ ] 完成本课小结
+- [x] 能解释 Embedding 的输入与 1024 维输出
+- [x] 能解释 sparse 向量保存了什么
+- [x] 能说清 Qdrant point 的 vector 与 payload
+- [x] 能解释为什么建库和查询必须使用同一个 Embedding 模型
+- [x] 完成本课小结
 
 ---
 
@@ -268,10 +274,10 @@
 
 **完成标准**：
 
-- [ ] 能解释 Dense 和 Sparse 各自擅长什么
-- [ ] 能用自己的话解释 RRF，不背公式也能讲明白
-- [ ] 能根据问题类型预测哪条检索路线更有优势
-- [ ] 完成本课小结和对比表
+- [x] 能解释 Dense 和 Sparse 各自擅长什么
+- [x] 能用自己的话解释 RRF，不背公式也能讲明白
+- [x] 能根据问题类型预测哪条检索路线更有优势
+- [x] 完成本课小结和对比表
 
 ### L07 Rerank、去重与 small-to-big
 
@@ -296,10 +302,10 @@
 
 **完成标准**：
 
-- [ ] 能解释召回候选池与 top-k 的区别
-- [ ] 能解释 Rerank 为什么更准但更慢
-- [ ] 能解释 section 去重与上下文扩展
-- [ ] 完成本课小结
+- [x] 能解释召回候选池与 top-k 的区别
+- [x] 能解释 Rerank 为什么更准但更慢
+- [x] 能解释 section 去重与上下文扩展
+- [x] 完成本课小结
 
 ### L08 Prompt、Grounding 与引用
 
@@ -324,10 +330,10 @@
 
 **完成标准**：
 
-- [ ] 能解释零召回时为什么不应该让 LLM 自由回答
-- [ ] 能解释 `[cite:n]` 到 Citation 对象的映射
-- [ ] 能说出至少两种幻觉或提示注入防线
-- [ ] 完成本课小结
+- [x] 能解释零召回时为什么不应该让 LLM 自由回答
+- [x] 能解释 `[cite:n]` 到 Citation 对象的映射
+- [x] 能说出至少两种幻觉或提示注入防线
+- [x] 完成本课小结
 
 ---
 
@@ -356,14 +362,14 @@
 
 **完成标准**：
 
-- [ ] 能解释 liveness 和 readiness 的区别
-- [ ] 能解释为什么部分业务失败仍返回结构化 JSON
-- [ ] 能找到请求耗时和错误统计的位置
-- [ ] 完成本课小结
+- [x] 能解释 liveness 和 readiness 的区别
+- [x] 能解释为什么部分业务失败仍返回结构化 JSON
+- [x] 能找到请求耗时和错误统计的位置
+- [x] 完成本课小结
 
 ### L10 Docker 与在线推理适配器
 
-**目标**：真正理解三个容器的职责和网络调用，而不是只会启动命令。
+**目标**：理解三层核心 RAG（Pharos、Qdrant、在线推理适配器）以及 PostgreSQL、Redis、Worker 等配套服务的职责和网络调用，而不是只会启动命令。
 
 **先读**：
 
@@ -380,165 +386,193 @@
 
 **实验**：
 
-- 画出三个容器、两个云 API 和端口之间的连接图。
+- 画出当前 Compose 服务、两个云 API 和端口之间的连接图。
 - 单独停止 `cloud-inference`，观察 `/readyz` 与检索如何变化，然后恢复。
 - 修改一条无关紧要的日志文字，观察自动 reload。
 
 **完成标准**：
 
-- [ ] 能解释容器与镜像的区别
-- [ ] 能解释 bind mount 和 named volume 在本项目中分别保存什么
-- [ ] 能解释为什么 `pharos` 容器不需要 GPU/torch
-- [ ] 完成本课小结
+- [x] 能解释容器与镜像的区别
+- [x] 能解释 bind mount 和 named volume 在本项目中分别保存什么
+- [x] 能解释为什么 `pharos` 容器不需要 GPU/torch
+- [x] 完成本课小结
 
-### L11 身份、ACL、会话与 fail-closed
+### L11 身份认证、ACL 与会话隔离
 
-**目标**：理解这个项目与普通 RAG Demo 的关键工程差异。
+**目标**：沿真实代码区分“你是谁”“你能看什么”“同一会话看过什么”，理解项目最重要的安全边界。
 
-**先读**：
+**已有材料**：
 
 - `docs/learning/04-acl-security.md`
+- `src/pharos/identity.py`：API Key 到 `Identity` 的解析与配置校验。
+- `src/pharos/service.py`：鉴权 middleware、`request.state.identity` 和 `_current_user()`。
+- `src/embedder/types.py`、`src/embedder/acl.py`：检索用户和 fail-closed ACL 判定。
+- `src/embedder/store.py`：ACL 如何下推到 Dense/Sparse 召回过滤器。
+- `src/pharos/sessions.py`：有界 LRU 会话去重集合。
+- `tests/engine/test_acl.py`、`tests/test_sessions.py`、`tests/test_team.py`：安全不变量的现成测试。
 
-**看代码**：
+**按顺序学习**：
 
-- `src/pharos/identity.py`
-- `src/embedder/acl.py`
-- `src/pharos/sessions.py`
-- `src/pharos/service.py`：鉴权 middleware
-- `src/chunker/types.py`：ACL 字段
+1. `load_keys()` 如何把密钥解析为 tenant、principals、roles 和 admin。
+2. middleware 如何拒绝错误密钥，并把身份放入单次请求。
+3. `acl_admits()` 如何默认拒绝，Qdrant 召回时又如何提前过滤。
+4. 同一个伪造 session id 为什么不能让两个用户共享去重状态。
+5. 对照测试确认“无身份、跨租户、空 allow”均不会意外放行。
 
 **实验**：
 
-- 使用错误 API Key 验证 401。
-- 创建一份仅特定 principal 可见的小测试文档。
-- 用两种身份验证：允许身份能检索，其他身份得到空结果。
+- Docker 关闭时先运行 ACL、Session 和身份单测，并手工画出 `API Key → Identity → User → Qdrant Filter`。
+- Docker 恢复后再补双身份实测：私有文档只允许拥有者检索，其他身份得到空结果而不是暴露文档存在性。
 
 **完成标准**：
 
-- [ ] 能区分身份认证与内容授权
-- [ ] 能解释 ACL 为什么必须在检索阶段过滤
-- [ ] 能解释 fail-closed
+- [ ] 能区分 authentication、authorization 和 session state
+- [ ] 能解释 ACL 为什么既要下推检索，又要在出口复核
+- [ ] 能解释 fail-closed，以及空 ACL/无身份为何不能默认放行
 - [ ] 能说明会话去重为什么必须绑定身份
 - [ ] 完成本课小结
 
-### L12 MCP 与 Agentic RAG
+### L12 MCP 工具面与两种调用出口
 
-**目标**：从闭管道问答过渡到由 Agent 自己规划检索步骤。
+**目标**：先学清 MCP 只是把检索能力暴露给外部 Agent 的工具协议，不把“接入 MCP”误认为项目内部已经完成规划。
 
-**先读**：
+**已有材料**：
 
 - `docs/learning/06-agentic-mcp.md`
-
-**看代码**：
-
-- `src/pharos/mcp_adapter.py`
-- `src/pharos/toolcore.py`
-- `src/pharos/mcp_stdio.py`：只比较 direct 模式差异
+- `docs/components/mcp-server.md`
+- `src/pharos/toolcore.py`：六个工具共享的业务语义。
+- `src/pharos/mcp_adapter.py`：通过 HTTP 调用正在运行的 FastAPI。
+- `src/pharos/mcp_stdio.py`：同进程 direct 模式，直接装配 Retriever。
 - `.mcp.json.example`
+- `tests/engine/test_tools.py`、`tests/test_adapter.py`、`tests/test_review_fixes.py`
+
+**按顺序学习**：
+
+1. 六个工具：`retrieve`、`list_documents`、`get_document`、`get_outline`、`expand`、`retrieve_grouped`。
+2. 为什么工具语义只放在 `toolcore.py`，HTTP 与 direct 出口只负责适配。
+3. HTTP adapter 如何转发 API Key、Session 和过滤参数，并把后端错误变成稳定结构。
+4. direct stdio 如何绑定服务端身份，以及它与守护进程模式的部署差异。
+5. MCP 客户端负责决定调用顺序，Pharos 只执行受约束的工具。
 
 **实验**：
 
-- 配置本地 MCP 客户端连接 Pharos。
-- 让 Agent 先 `list_documents`，再 `get_outline`，然后 `retrieve`。
-- 设计一个必须 `expand` 或跨文档检索的问题。
-- 对比相同问题在 `/v1/ask` 和 Agentic 路径下的调用次数、答案与成本。
+- 先运行工具与适配器单测，比较同一工具经 `mcp_adapter` 和 `mcp_stdio` 的输入输出契约。
+- Docker 恢复后再做一次真实 MCP 调用：`list_documents → get_outline → retrieve → expand`。
 
 **完成标准**：
 
-- [ ] 能解释为什么 `/v1/ask` 不是 Agentic RAG
-- [ ] 能说出六个 MCP 工具的职责
-- [ ] 能解释 Agent 在哪里做规划、Pharos 在哪里执行检索
-- [ ] 能说出 Agentic 模式的优势和风险
+- [ ] 能说出六个 MCP 工具各自的输入、输出和适用时机
+- [ ] 能解释 HTTP adapter、direct stdio 和 `toolcore` 的职责边界
+- [ ] 能解释 MCP 为什么只是 Agentic RAG 的工具层
+- [ ] 能说明身份、超时和错误如何穿过适配层
 - [ ] 完成本课小结
 
-### L13 测试、评估与证据
+### L13 内置有限步 Agentic RAG 状态机
 
-**目标**：学会用数据判断改动，而不是只看单个问答感觉不错。
+**目标**：学习当前项目已经实现的 `direct / auto / agent` 三种路线，而不是再把 Agentic RAG 写成未来计划。
 
-**先读**：
+**已有材料**：
 
-- `docs/learning/07-evaluation.md`
-- `docs/TESTING.md`
+- `docs/AGENTIC_RAG.md`
+- `src/pharos/agentic.py`：路由、证据判断、补检、预算和 trace。
+- `src/pharos/service.py`：`_agentic_ask()`、`/v1/ask` 与 `/v1/agent/ask`。
+- `src/generator/generate.py`：复用 ACL 后 Context 和最终 Grounded 生成。
+- `src/rag_runtime/deadline.py`：请求截止时间和阻塞调用容量控制。
+- `tests/test_agentic.py`、`tests/test_runtime_deadlines.py`、`tests/test_eval_agent_benchmark.py`
 
-**看代码**：
+**按顺序学习**：
 
-- `tests/test_service.py`
-- `tests/engine/test_retrieve.py`
-- `tests/engine/test_generate.py`
-- `eval/` 中的入口脚本和样例格式
+1. `requires_agent()` 和 auto 路由为什么只是低成本启发式。
+2. `EvidenceController` 如何只返回受校验 JSON，不负责最终回答。
+3. `AgenticRunner.run()` 如何执行“检索 → 判断 → 改写 query → 补检 → 合并证据 → 回答”。
+4. 最大检索次数、LLM 次数、步骤数、deadline 和线程槽位分别限制什么。
+5. 控制器异常、超时、零召回和预算耗尽时如何降级或拒答。
+6. trace 为什么是行为审计，不是暴露模型 chain-of-thought。
 
 **实验**：
 
-- 为一个已理解的函数补一个单元测试。
-- 建立 10–20 题属于当前技术文档库的小评估集。
-- 至少记录召回命中、答案正确和引用正确三项。
+- 运行 Agent 状态机和 deadline 单测，挑选“证据充足、补检成功、控制器异常、超时”四条 trace 逐步解释。
+- Docker 恢复后，再用同一问题比较 direct、auto、agent 的检索次数、延迟、引用和停止原因。
 
 **完成标准**：
 
-- [ ] 能区分组件测试和端到端评估
-- [ ] 能解释 Recall、MRR、正确性、忠实度和引用正确性
-- [ ] 能说明为什么不能只展示一条成功案例
+- [ ] 能画出有限步 Agent 状态机
+- [ ] 能解释 query 改写与再次检索在什么条件下发生
+- [ ] 能区分 MCP 外部 Agent 与项目内置 Agentic Runner
+- [ ] 能解释预算、deadline、降级和 trace
 - [ ] 完成本课小结
 
 ---
 
 ## 阶段五：把项目变成自己的
 
-### L14 用 Git 划清上游与个人改造
+### L14 上传入口、格式解析与入库 Pipeline
 
-**目标**：先分清原项目能力和个人新增能力，后续学习、简历和面试都不混淆归属。
+**目标**：先理解“一份 Markdown/PDF 怎样变成可供异步任务处理的标准入库流程”，暂时不深入 PostgreSQL 和 Celery 的可靠投递。
 
-**按顺序查看**：
+**已有材料**：
 
-1. `162c7ca`：拉取项目时的上游基线。
-2. `0995802`：个人新增的 Markdown/PDF 上传与 MinerU 接入。
-3. `6e01f28`：Apple Silicon + 在线推理开发栈。
-4. `9f787cc..cd6629d`：可靠异步上传任务演进。
-5. `f0cb7ba`：可审计文档生命周期。
+- `docs/API.md`：上传与任务接口。
+- `src/pharos/service.py`：`upload_document()` 入口和权限检查。
+- `src/pharos/uploads.py`：`build_upload_acl()`、`DocumentUploadManager.create()`。
+- `src/pharos/markdown_ingest.py`：Markdown/RST 到 `content_list`。
+- `src/pharos/mineru.py`、`src/pharos/ingestion/factory.py`：PDF 上传、轮询、下载和安全解压。
+- `src/pharos/ingestion/pipeline.py`：解析、Chunk、Embedding、Qdrant 与 Sidecar 发布。
+- `tests/test_markdown_ingest.py`、`tests/test_mineru.py`、`tests/test_uploads.py`
+
+**按顺序学习**：
+
+1. 上传角色、access scope、groups 如何被校验并生成 ACL。
+2. 文件大小、扩展名、文件名和落盘目录怎样限制危险输入。
+3. Markdown 与 PDF 两条解析路径怎样重新汇合到 `Element[]/ChunkResult`。
+4. Pipeline 各 stage：解析、切块、编码、发布、清理临时产物。
+5. 为什么上传 API 只创建文档和任务，而不在 HTTP 请求里完成耗时入库。
 
 **实验**：
 
-- 查看每个里程碑相对上一个里程碑的文件变化。
-- 任选一个新增接口，沿提交记录说明它为什么出现、后来修过什么问题。
-- 建立一张“上游已有 / 我们新增 / 后续计划”对照表。
+- 运行 Markdown、MinerU 和上传校验测试；用一份极小 Markdown 手工跟踪生成的 `content_list`、Chunk 和最终 document id。
+- PDF 在线实测留到 Docker 与 MinerU 均启动时执行，未启动时不阻塞代码学习。
 
 **完成标准**：
 
-- [ ] 能诚实区分上游能力和个人改造
-- [ ] 能用提交历史讲出功能演进，而不是只报最终代码量
-- [ ] 能解释分支、提交、合并提交各自的作用
+- [ ] 能解释上传入口如何生成文档身份和 ACL
+- [ ] 能画出 Markdown/PDF 两条解析路径的汇合点
+- [ ] 能说出 Pipeline 的阶段、正式产物和临时产物
+- [ ] 能解释为什么上传不能长期占用一次 HTTP 请求
 - [ ] 完成本课小结
 
-### L15 可靠异步上传：从 HTTP 请求到可检索文档
+### L15 PostgreSQL、Outbox、Redis 与 Celery 可靠任务
 
-**目标**：理解上传为什么不能在一次 HTTP 请求里同步完成，以及 PostgreSQL、Redis、Celery、Worker 和 Outbox 如何协作。
+**目标**：聚焦任务可靠性，理解 PostgreSQL 为什么是事实源，以及 Outbox、Redis、Celery Worker 和 Scheduler 如何协作。
 
 **先读**：
 
 - `docs/RELIABLE_UPLOAD_JOBS.md`
-- `docs/API.md`：文档上传和任务查询部分
+- `migrations/versions/0001_reliable_upload_jobs.py`
 
 **按执行顺序看代码**：
 
-1. `src/pharos/service.py`：`upload_document()`、任务查询与重试入口。
-2. `src/pharos/uploads.py`：文件校验、ACL 标准化和本地落盘。
-3. `src/pharos/jobs/models.py`：文档、任务与 Outbox 的状态字段。
-4. `src/pharos/jobs/repository.py`：事务写入、任务认领和状态更新。
-5. `src/pharos/jobs/dispatcher.py` 与 `src/pharos/worker/tasks.py`：消息分发和 Worker 执行。
-6. `src/pharos/ingestion/pipeline.py`：解析、切块、Embedding 与索引发布。
+1. `src/pharos/jobs/models.py`：Document、IngestionJob、Outbox 三张表。
+2. `src/pharos/jobs/repository.py`：只读 `create/claim/heartbeat/retry/recover/outbox` 相关方法，不通读全部 996 行。
+3. `src/pharos/jobs/dispatcher.py`：先抢占 Outbox 发布权，再投递 Celery。
+4. `src/pharos/worker/celery_app.py`：ingestion/control 两个队列和 Beat 周期任务。
+5. `src/pharos/worker/tasks.py`：Worker 执行、心跳、待投递扫描和失联恢复。
+6. `src/pharos/worker/runtime.py`：Worker 进程怎样装配 Repository、Pipeline 和 Dispatcher。
+7. `tests/test_jobs.py`、`tests/test_worker_tasks.py`、`tests/test_celery_config.py`。
 
 **实验**：
 
-- 上传一份短 Markdown 和一份 PDF，轮询任务直至 `succeeded`。
-- 暂停 Worker 后上传文档，观察请求、数据库任务和 Outbox 的状态；恢复后确认任务最终执行。
-- 构造一次可重试失败，验证手动重试不会覆盖旧任务历史。
+- 先运行 jobs、worker 和 Celery 配置测试，跟踪一条任务从 `queued → running → succeeded`。
+- 用状态表推演三种故障：数据库提交后 Redis 不可用、消息已发但确认丢失、Worker 运行中失联。
+- Docker 恢复后再做暂停 Worker 的真实实验，观察 PostgreSQL、Outbox 和恢复任务的变化。
 
 **完成标准**：
 
 - [ ] 能画出 `API → PostgreSQL/Outbox → Redis → Celery Worker → MinerU → Qdrant` 链路
 - [ ] 能解释为什么任务状态不能只放 Redis
 - [ ] 能解释 Outbox 解决的“双写一致性”问题
-- [ ] 能说明幂等、认领、重试和恢复分别防什么故障
+- [ ] 能说明认领、心跳、退避重试和定时恢复分别防什么故障
+- [ ] 能解释 at-least-once 为什么仍然要求任务幂等
 - [ ] 完成本课小结
 
 ### L16 文档生命周期、ACL 变更与并发一致性
@@ -548,22 +582,23 @@
 **先读**：
 
 - `docs/DOCUMENT_LIFECYCLE.md`
+- `docs/RELIABILITY_FIXES_2026-09-19.md`：只读 publication fencing 部分。
 - `docs/API.md`：`/v1/uploads`、`reindex`、`access` 和删除接口
 
 **按场景看代码**：
 
-1. `src/pharos/service.py`：四个生命周期 API 的权限和错误契约。
-2. `src/pharos/jobs/repository.py`：普通用户/管理员列表范围、held job、Outbox 与恢复。
-3. `src/pharos/ingestion/pipeline.py`：旧索引删除与新索引发布。
-4. `tests/test_uploads.py`：接口、身份、ACL 与失败分支。
-5. `tests/test_jobs.py`：并发认领、恢复和数据库锁顺序。
+1. `src/pharos/service.py`：列表、重建、权限变更和删除 API 的权限与错误契约。
+2. `src/pharos/uploads.py`：`reindex_document/update_access/delete_document` 编排。
+3. `src/pharos/jobs/repository.py`：prepare/activate/fail access update、软删除、恢复和固定锁顺序。
+4. `src/pharos/ingestion/pipeline.py`：`publish_guard` 内删除旧索引、写新向量和替换 Sidecar。
+5. `tests/test_uploads.py`、`tests/test_jobs.py`、`tests/test_publication_fencing.py`：状态机、并发与旧 Worker 复活回归。
 
 **实验**：
 
-- 对同一文档依次执行列表、重建索引、收紧 ACL 和软删除，记录每一步的文档状态与任务状态。
-- 用普通用户和同租户管理员对比 `/v1/uploads` 可见范围。
-- 在任务运行期间重复发起冲突操作，确认服务拒绝并发生命周期变更。
-- 根据真实修复记录复述 PostgreSQL 死锁的两条锁路径，以及统一锁顺序为什么能解决问题。
+- 先运行生命周期、jobs 和 publication fencing 测试，画出 document state 与 job state 两条相关但不同的状态机。
+- 根据真实修复记录复述 PostgreSQL 死锁的两条锁路径，以及统一 `job → outbox` 锁顺序为什么能解决问题。
+- 推演“旧 Worker 超时后复活”的场景，解释租约和 `publish_guard` 为什么必须覆盖正式发布区。
+- Docker 恢复后再对一份临时文档完整执行：列表、重建、收紧 ACL、软删除。
 
 **完成标准**：
 
@@ -571,81 +606,148 @@
 - [ ] 能解释为什么 ACL 更新先进入 held 状态，再删除旧索引并发布新任务
 - [ ] 能解释软删除为何保留数据库审计记录，但删除向量和本地资产
 - [ ] 能解释 `job → outbox` 统一锁顺序如何避免死锁
+- [ ] 能解释旧 Worker 为什么不能在失去租约后覆盖新索引
 - [ ] 完成本课小结和一张文档状态机图
 
-### L17 可观察的 Agentic RAG 工作流
+### L17 Next.js 前端、BFF 与权限展示
 
-**目标**：在现有 MCP 工具面之上实现真正可评估的 Agent 编排，而不把“接入 MCP”直接等同于 Agentic RAG。
+**目标**：学习已经存在的完整前端，理解浏览器为什么不直接保存或发送后端密钥，以及 UI 如何承接问答、上传、生命周期和 Agent trace。
 
-**计划能力**：
+**已有材料**：
 
-1. 判断是否需要检索并生成检索计划。
-2. 查询改写、首次召回和证据充足度判断。
-3. 证据不足时按章节、文档或子问题继续检索。
-4. 限制最大步骤、最大 token 与超时，失败时降级或拒答。
-5. 返回每步 trace，并与 `/v1/ask` 做正确率、引用、延迟和成本对比。
+- `frontend/README.md`
+- `frontend/src/app/page.tsx`：页面状态和主要交互。
+- `frontend/src/app/api/session/route.ts`：登录验证和 HttpOnly Cookie。
+- `frontend/src/app/api/ask/route.ts`、`retrieve/route.ts`、`expand/route.ts`：问答代理。
+- `frontend/src/app/api/uploads/route.ts`、`documents/**`、`jobs/**`：上传和管理代理。
+- `frontend/src/lib/pharos.ts`：统一后端请求、错误映射和 Cookie 取 key。
+- `frontend/src/components/agent-trace.tsx`：Agent 路由、步骤和预算展示。
+- `frontend/scripts/smoke.mjs`、`two-user-smoke.mjs`、`pdf-smoke.mjs`：真实联调脚本。
 
-**完成标准**：
+**按顺序学习**：
 
-- [ ] 先完成设计文档和状态图，再写业务代码
-- [ ] 至少覆盖单跳、单篇多跳、跨文档和无答案四类问题
-- [ ] 每一步可观察、可限制、可测试
-- [ ] 用评估数据说明 Agentic 路径何时更好、何时不值得
+1. 浏览器 → Next.js Route Handler → FastAPI 的 BFF 链路。
+2. API Key 为什么进入 HttpOnly Cookie，而不是 localStorage 或 `NEXT_PUBLIC_*`。
+3. `/v1/me` 返回的角色如何控制按钮显示，但真正授权仍由 FastAPI 执行。
+4. direct/auto/agent 的结果、引用、空答案、降级和 trace 如何映射成 UI 状态。
+5. 上传任务轮询、失败重试、ACL 修改、重建和删除如何复用统一错误结构。
 
-### L18 简单前端：把后端能力变成可演示产品
+**实验**：
 
-**目标**：让非开发者能够上传文档、查看任务进度、提问并检查引用和 Agent trace。
-
-**最小范围**：
-
-1. 登录身份或开发身份选择。
-2. 文档列表、上传、任务进度和失败重试。
-3. 对话页、来源卡片和无答案提示。
-4. 管理员执行重建索引、ACL 更新和软删除。
-5. Agentic 模式的步骤 trace 展示。
+- 在不启动后端时先阅读路由和运行 `npm run lint`、`npm run build`。
+- Docker 恢复后按顺序运行基础 smoke、双身份 smoke；MinerU PDF smoke 单独执行并记录外部调用。
 
 **完成标准**：
 
-- [ ] 前端能完成一份文档从上传到问答的完整演示
-- [ ] 普通用户和管理员看到的管理能力符合权限设计
-- [ ] 错误、空库和处理中状态有明确反馈
-- [ ] 引用可以定位到来源文档
+- [ ] 能解释 BFF、HttpOnly Cookie 和 FastAPI 权限校验的分工
+- [ ] 能从一个按钮追到对应 Route Handler 和后端 API
+- [ ] 能解释 Agent trace、引用和任务状态的前端数据结构
+- [ ] 能说明“隐藏按钮”为什么不等于安全授权
+- [ ] 完成本课小结
 
-### L19 工程化、评估与部署
+### L18 自动化测试、Golden Set 与 Agent 配对评测
 
-**目标**：用可重复证据证明系统可靠、有效且能够部署，而不是只演示一条成功问答。
+**目标**：把“测试代码是否符合契约”和“评测 RAG 答得是否更好”分开，学会正确解释现有指标和局限。
 
-**任务**：
+**已有材料**：
 
-- 建立 20–50 题个人评估集，覆盖检索、答案、引用、权限和 Agentic 多跳。
-- 增加 CI、结构化日志、关键指标、限流与备份恢复说明。
-- 分离开发和部署 Compose，补 HTTPS、随机密钥和数据持久化方案。
-- 记录 Recall@K、MRR、正确率、引用正确率、P95 延迟和单次成本。
+- `docs/learning/07-evaluation.md`、`docs/TESTING.md`
+- `eval/README.md`、`eval/BASELINE.md`
+- `eval/official_agent_smoke.json`、`eval/official_agent_gold.json`、`eval/official_agent_gold_v2.json`
+- `eval/agent_benchmark.py`、`eval/run_eval.py`、`eval/aggregate.py`
+- `eval/GOLD_REVIEW_2026-09-19.md`、`eval/GOLD_V2_AI_SOURCE_REVIEW_2026-09-19.md`
+- `tests/test_eval_agent_benchmark.py`、`tests/test_eval_service_smoke.py`
+
+**按顺序学习**：
+
+1. 单元测试、契约测试、集成测试、smoke 和离线/在线评测分别证明什么。
+2. 检索 Recall@K、MRR、引用来源组召回、答案正确性、忠实度和拒答率。
+3. 同一题成对运行 direct/agent/auto，为什么比只展示 Agent 成功案例更可信。
+4. Golden Set 的题型、必需事实、允许来源和人工审核记录怎样组织。
+5. 同厂模型裁判、样本量小、单次运行和答案截断为什么限制结论外推。
+
+**实验**：
+
+- 不调用付费模型：先运行评测脚本自身的单测，并人工检查至少 5 道题的题目、必需事实和引用来源。
+- 选一份已有 benchmark report，手算一题的正确性/引用/成本字段，核对聚合结果。
+- 需要新指标时再复跑固定版本考卷；不要为了学习重复产生云模型费用。
 
 **完成标准**：
 
-- [ ] 评估可重复运行且结果可追溯
-- [ ] 服务重启后任务、文档记录和向量仍然存在
-- [ ] 至少完成一次从空环境开始的部署演练
-- [ ] README 中只使用自己实测的数字
+- [ ] 能区分自动化测试通过与 RAG 效果好
+- [ ] 能解释 Recall、MRR、正确性、忠实度、引用正确性和正确拒答
+- [ ] 能读懂一条 gold case 和一条 benchmark result
+- [ ] 能指出当前基线至少三项局限，避免把开发基线写成最终结论
+- [ ] 完成本课小结
 
-### L20 简历、架构图和面试复盘
+### L19 可靠性边界、扩容与部署运维
 
-**先读**：
+**目标**：学习项目里已经落地的超时、发布保护、代理安全、备份恢复和横向扩容设计，不再笼统写“以后补工程化”。
 
+**已有材料**：
+
+- `docs/RELIABILITY_FIXES_2026-09-19.md`
+- `docs/OPERATIONS.md`、`docs/RUNBOOK.md`、`docs/SCALE_OUT.md`
+- `compose.mac.yml`、`deploy/nginx.conf`
+- `src/rag_runtime/deadline.py`、`src/pharos/obs.py`
+- `src/embedder/remote.py`、`src/generator/llm.py`：剩余时间如何传入网络调用。
+- `src/pharos/ingestion/pipeline.py`、`src/pharos/jobs/repository.py`：发布围栏。
+- `tests/test_runtime_deadlines.py`、`tests/test_proxy_safety.py`、`tests/test_publication_fencing.py`
+
+**按顺序学习**：
+
+1. Agent 绝对 deadline、网络 timeout、线程槽位和“超时不能杀死 Python 线程”的边界。
+2. publication fencing 如何阻止失去租约的 Worker 覆盖正式索引。
+3. Nginx 为什么只安全重试幂等请求，写请求为何禁止自动重放。
+4. 多副本下哪些状态已经外置，哪些本地文件仍限制真正水平扩容。
+5. named volume、备份/恢复、RTO/RPO、密钥和 HTTPS 的部署要求。
+6. 结构化日志、健康探针和 P50/P95 如何用于容量判断。
+
+**实验**：
+
+- 运行 deadline、代理配置和 publication fencing 回归测试。
+- 阅读现有备份恢复记录，写出“已经实测 / 仅推算 / 尚未验证”三列证据表。
+- Docker 恢复后做一次从空环境启动和数据重启保留检查；不重复破坏性故障演练现有正式数据。
+
+**完成标准**：
+
+- [ ] 能解释 timeout、deadline、取消和远端计费不是一回事
+- [ ] 能解释为什么写请求不能由代理透明重放
+- [ ] 能说清当前多副本扩容的可行部分和本地状态限制
+- [ ] 能根据证据区分已验证能力和设计目标
+- [ ] 完成本课小结
+
+### L20 Git 溯源、项目归属、简历与面试复盘
+
+**目标**：最后再用 Git 和文档划清上游能力、个人提交和当前未提交改动，把已经学懂的系统转换为可核验的项目陈述。
+
+**已有材料**：
+
+- `docs/PROVENANCE.md`
 - `docs/learning/10-methodology-stories.md`
 - `docs/learning/11-interview-qa.md`
+- `README.md`、`docs/assets/architecture.svg`
+- Git 里程碑：`162c7ca` 上游基线、`0995802` 上传、`6e01f28` Mac 在线推理、`9f787cc..cd6629d` 可靠任务、`f0cb7ba` 生命周期、`a28829a..5414a51` Agent 与评测；本轮新增 `83c243e` 发布围栏、`61cc214` Agent deadline、`d4a1d35` V2 题库和 `576a115` Web UI。
+- 当前分支已将前端、可靠性修复、Agent 截止时间和 V2 评测题库拆成独立提交；合并前仍需完成真实 V2 在线评测与最终人工签收。
+
+**按顺序学习**：
+
+1. 用 `git diff`/`git log` 比较每个里程碑，建立“上游已有 / 个人新增 / 未完成”对照表。
+2. 从上传、Agentic RAG、ACL/并发修复中各选一个，讲清问题、方案、权衡、测试和结果。
+3. 把架构图中的每个组件与真实文件、接口和数据存储对应起来。
+4. 检查 README、评测数字和截图，只保留能够由日志、测试或报告复现的说法。
+5. 准备 30 秒、3 分钟、15 分钟三个粒度的项目介绍。
 
 **最终产出**：
 
-- [ ] 一张自己能讲清的系统架构图
-- [ ] 一份 README：问题、架构、功能、运行方式、指标、截图
-- [ ] 20–30 道当前知识库评估集及结果
-- [ ] 3 个自己完成的功能或优化
-- [ ] 1 个真实故障排查故事
+- [ ] 一张自己能从请求入口讲到存储与云服务的系统架构图
+- [ ] 一张“上游已有 / 个人新增 / 当前限制”归属表
+- [ ] README 中的运行方式、测试、指标和截图与当前代码一致
+- [ ] 3 个有真实提交和测试证据的个人改造故事
+- [ ] 1 个真实故障排查故事和 1 个明确的负面/局限结论
 - [ ] 30 秒、3 分钟、15 分钟三档项目介绍
-- [ ] 简历项目描述中的每个数字都有测试依据
-- [ ] 能明确说明上游基础、个人改造和仍未完成的部分
+- [ ] 简历中的每个技术点和数字都有文件、提交或报告可追溯
+- [ ] 完成最终模拟面试复盘
 
 ---
 
@@ -699,12 +801,70 @@
 - 本课小结：固定字符切块会破坏语义边界并丢失标题语境；本项目用小 Chunk 提升召回精度，同时保留 Section sidecar，在查询期按 token 预算恢复完整章节或受限窗口。
 - 下一课：L05 Embedding、稀疏向量与 Qdrant 建库。
 
-#### 2026-09-15 · L05 Embedding、稀疏向量与 Qdrant 建库
+#### 2026-09-15–16 · L05 Embedding、稀疏向量与 Qdrant 建库
 
-- 状态：进行中。
-- 当前学习入口：一个 `Chunk` 如何转换成同时带 dense、sparse 和 payload 的 Qdrant point。
-- 本课主线：`Chunk → Embedder → dense/sparse vectors + payload → Store.upsert() → Qdrant collection`。
-- 下一步：先看 `src/pharos/indexer.py` 的建库编排，再进入 `src/embedder/embed.py` 的 point 构造。
+- 状态：代码与原理学习完成；隔离 Collection 建库实验按学习者选择跳过。
+- 本课主线：`Chunk → Embedder → dense/sparse vectors + payload → PointStruct → Store.upsert() → Qdrant collection`。
+- 已掌握：Dense 将一个文本 Chunk 编码并按 MRL 截取、归一化为 1024 维向量；Sparse 用统一分词和稳定哈希保存 token 编号与文档词频；payload 保存正文、结构定位、来源和 ACL。
+- 关键设计：`make_dense()` 按配置选择本地 `Dense` 或远程 `RemoteDense`；普通文本 point 有 dense、sparse 和 payload，`image_only` point 只有图片 dense 和 payload；重索引先准备向量与 Sidecar 临时文件，再删除旧 Point、批量 upsert 并原子替换 Sidecar。
+- 本课小结：建库与查询必须使用同一 Embedding 模型、维度和归一化规则，使文档向量与查询向量处于同一坐标空间；即使维度相同，不同模型的向量也不能混用，更换模型必须重建 Collection。
+- 下一课：L06 Dense、Sparse、Hybrid 与 RRF。
+
+#### 2026-09-16 · L06 Dense、Sparse、Hybrid 与 RRF
+
+- 状态：代码与原理学习完成；Dense/Sparse/Hybrid 接口对比实验按学习者选择跳过。
+- 本课主线：`query → dense query vector + sparse query vector → ACL 下推 → 两路 prefetch → Qdrant RRF → Hit[]`。
+- 检索对比：Dense 擅长同义表达和概念语义；Sparse/BM25 擅长命令、版本号、错误码和精确术语；Hybrid 用 RRF 按两路名次融合，避免直接相加 cosine 与 BM25 两种不同量纲的分数。
+- 代码定位：`Retriever.search()` 生成两种查询向量并选择策略；`Store.hybrid_search()` 把 ACL 放入每条召回路径，`FusionQuery(fusion=Fusion.RRF)` 让 Qdrant 执行排名融合，出口再复核 ACL。
+- 本课小结：RRF 是低成本的候选融合，不是模型精排；先在权限范围内召回，才能避免无权结果占满候选池后再过滤造成的漏召回。
+- 下一课：L07 Rerank、去重与 small-to-big。
+
+#### 2026-09-16 · L07 Rerank、去重与 small-to-big
+
+- 状态：代码与原理学习完成；`rerank`/`expand` 接口对比实验按学习者选择跳过。
+- 本课主线：`Hit 候选池 → 可选 Reranker → section 去重 → 读取并缓存每篇文档的 Sidecar → assemble_big → Context`。
+- 已掌握：Reranker 把 query 与候选正文一起输入模型，重新写入相关性分数并截取最终 top-k；失败时安全降级为原召回结果。`search_with_context()` 先按 section 去重，表格和图表按 chunk 独立保留，再按实际 BigBlock anchor 去除重复上下文。
+- 上下文扩展：Sidecar 保存整篇文档的 Elements、Sections、banners 与 ACL 索引，不保存 Hit；同文档多个 Hit 在一次查询中复用同一份缓存。当前章节超过 `max_tokens` 时在当前章节内围绕命中位置开窗；当前章节太小但父章节超过上限时，在父章节内开窗并可能包含兄弟小节。
+- 本课小结：召回到的 Hit 是用于定位的相关小块，最终 Context 是经过权限校验、章节去重和 token 预算控制后交给生成模型的证据，两者不是同一份数据。
+- 下一课：L08 Prompt、Grounding 与引用。
+
+#### 2026-09-16–20 · L08 Prompt、Grounding 与引用
+
+- 状态：完成。
+- 本课主线：`Hit/Context → Generator.answer() → PromptBuilder → LLMClient.complete() → [cite:n] 解析 → Answer/Citation`。
+- 已掌握：零召回时由代码确定性拒答；SYSTEM 将检索正文声明为不可信证据；PromptBuilder 中和正文与问题里的伪造引用标记；合法 `[cite:n]` 按位置映射回 `meta[n-1]` 并构造 Citation。
+- LLM 装配：`LLMClient` 是行为协议，只要求对象实现 `complete(messages)`；生产环境由 `build_generator()` 注入 `OpenAICompatibleLLM`，测试可注入 `MockLLM`，不是依靠类名匹配。
+- 本课小结：引用证明答案使用了哪段证据，但不能单独证明论断一定正确；Grounding 依赖 Prompt 软约束、零召回硬拒答、引用协议和评测共同防守。
+- 下一课：L09 FastAPI 服务、错误契约和可观测性。
+
+#### 2026-09-20 · L09 FastAPI 服务、错误契约和可观测性
+
+- 状态：代码与原理学习完成；轻量接口实验因 Docker 已关闭而跳过。
+- 本课主线：`pharos serve → create_app() → lifespan 装配共享资源 → _observe/_auth 中间件 → FastAPI 路由 → toolcore/Generator → 结构化响应与日志`。
+- 已掌握：`app.state` 保存进程级共享资源，`request.state` 保存单次请求身份；API Key 决定身份，Retriever ACL 决定可见内容；`/healthz` 只判断进程存活，`/readyz` 检查 Qdrant、Collection 和远程推理服务是否可用。
+- 错误契约：HTTP 401/403/422/503 表示认证、权限、请求结构或服务可用性问题；查询域中的 `empty_query`、`bad_arg`、`backend_unavailable` 等用稳定的 `status/retriable/hint` 让程序决定下一步，观测层同时检查 HTTP 状态和业务状态。
+- 可观测性：`Stats` 用锁保护每端点次数、错误数和最近延迟窗口；`RequestLog` 在隐私收口后无阻塞放入有界队列，由后台单线程写 JSONL，队满时丢日志并计数，保证观测故障不拖垮问答服务。
+- 本课小结：服务层不负责重新实现 RAG，而是把身份、生命周期、HTTP 契约、健康检查、并发资源和可观测性包在 Retriever/Generator 外面，使脚本能力成为可长期运行、可被多个客户端安全调用的后端。
+- 下一课：L10 Docker 与在线推理适配器。
+
+#### 2026-09-20 · L10 Docker 与在线推理适配器
+
+- 状态：代码、配置和原理学习完成；停止在线推理服务与自动 reload 实验因 Docker 已按学习者要求关闭而跳过。
+- 本课主线：`浏览器/curl → pharos → Qdrant + cloud-inference → 阿里云 Embedding/Rerank → DeepSeek`；上传时扩展为 `pharos → PostgreSQL/Outbox → Redis/Celery → worker → MinerU/Chunker/Embedding → Qdrant`。
+- 已掌握：镜像是只读运行模板，容器是镜像的运行实例；服务之间在 `pharos-net` 中使用 Compose 服务名通信，宿主机只通过显式发布到 `127.0.0.1` 的端口访问服务。
+- 数据边界：`postgres-data`、`redis-data`、`qdrant-data` 是 Docker 管理的 named volume；源码、索引、上传文件和密钥使用 bind mount，便于本地开发、持久化和受控共享。停止或普通 `down` 不删除数据，`down -v` 会删除 named volume。
+- 在线推理：`PHAROS_INFERENCE_URL` 使 `pharos` 和 `worker` 使用 `RemoteDense/RemoteReranker`，由轻量 `cloud-inference` 适配器负责参数校验、顺序恢复、向量归一化和云端错误翻译，因此业务容器无需加载 torch、模型权重或 GPU 运行时。
+- 生命周期：`depends_on` 只控制启动时的健康依赖；运行期故障由 health/readiness、重试、降级与 restart policy 处理。源码 bind mount 配合 uvicorn reload，依赖或镜像内容变化则需要 rebuild/recreate。
+- 本课小结：Compose 不只是“一键启动”，而是明确服务职责、网络边界、数据生命周期和启动顺序；在线推理适配器把本地 RAG 工程与具体云模型 API 解耦。
+- 下一课：L11 身份认证、ACL 与会话隔离。
+
+#### 2026-09-20 · 后续学习路线重排
+
+- 原因：旧 L17 仍把已经实现的 Agentic Runner 写成“计划能力”，旧 L18 仍把已经存在的前端写成待开发范围，后续几课也缺少明确代码入口。
+- 调整：L11–L20 全部改为学习仓库中已经存在的代码、文档、测试和评测产物；MCP 工具面与内置 Agent 状态机拆成两课，上传解析与可靠任务拆成两课。
+- 新顺序：`安全边界 → MCP → 内置 Agent → 上传解析 → 异步任务 → 生命周期并发 → 前端 → 评测 → 运维部署 → Git/简历`。
+- 实验原则：Docker 关闭时优先做代码跟踪和无外部费用的单测；真实双身份、MinerU、在线模型和故障实验等到对应课程需要时集中启动服务，不因环境关闭打乱学习顺序。
+- 下一课：L11 身份认证、ACL 与会话隔离。
 
 #### 2026-09-12 · 开发检查点：上传任务与文档生命周期
 
