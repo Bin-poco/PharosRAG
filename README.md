@@ -67,6 +67,11 @@ One thing worth stating plainly: **the throughput ceiling is the forward speed o
 
 ## Getting started
 
+The web UI lives in [`frontend/`](frontend/README.md). It uses Next.js, TypeScript,
+Tailwind CSS and shadcn/ui to call the existing FastAPI service. Run it locally
+alongside the backend; the guide explains API key sign-in, document upload and
+the server-side API proxy.
+
 > Apple Silicon Mac 没有 NVIDIA GPU？使用 [Mac Docker + 在线模型开发指南](docs/MAC_DOCKER_DEV.md)，保留完整 FastAPI/Qdrant/Agentic RAG 链路，只把 CUDA 推理替换为阿里云百炼。后续迭代方向见 [项目路线图](docs/ROADMAP.md)。
 
 The service runs under systemd — starts at boot, restarts on failure. Day to day, a team member needs their own API key and then:

@@ -356,6 +356,20 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
         """agent 使用契约(与引擎 stdio server 的 MCPServer instructions 同文)。"""
         return {"status": "ok", "instructions": tc._INSTRUCTIONS}
 
+    @app.get("/v1/me")
+    def current_identity(request: Request):
+        """供前端读取当前身份和操作权限；身份始终来自已验证的请求。"""
+        iden = getattr(request.state, "identity", None)
+        if iden is not None:
+            return {"status": "ok", "identity_mode": mode, "name": iden.name,
+                    "tenant": iden.tenant, "principals": iden.principals,
+                    "roles": iden.roles, "admin": iden.admin}
+        current = _current_user(request)
+        return {"status": "ok", "identity_mode": mode, "name": _iden_name(request),
+                "tenant": getattr(current, "tenant", ""),
+                "principals": getattr(current, "principals", []),
+                "roles": ["reader"], "admin": False}
+
     # ---------- 检索工具面(六个,与 MCP 工具一一对应,语义同 toolcore)----------
     @app.post("/v1/retrieve")
     def retrieve(q: RetrieveReq, request: Request):

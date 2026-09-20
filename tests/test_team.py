@@ -44,6 +44,17 @@ def test_append_key_roundtrip(tmp_path):
 
 
 # ---------- keys 模式:鉴权 + 身份流到引擎 ----------
+def test_me_reports_verified_identity_without_key():
+    with TestClient(make_app(keys=dict(KEYS))) as c:
+        assert c.get("/v1/me").status_code == 401
+        r = c.get("/v1/me", headers={"X-API-Key": "pk_alice_0123456789abcdef"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "identity_mode": "keys", "name": "alice",
+                        "tenant": "demo", "principals": ["g_eng"],
+                        "roles": ["reader"], "admin": True}
+    assert "key" not in r.json()
+
+
 def test_keys_mode_401_and_identity_reaches_engine():
     ret = FakeRetriever(results_factory=lambda: [make_res(make_hit(), ctx_text="ctx")])
     with TestClient(make_app(retriever=ret, keys=dict(KEYS))) as c:

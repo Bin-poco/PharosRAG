@@ -18,6 +18,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend:
+    name: frontend (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
   tests:
     # 这一档跑的正是 README / tests/README 承诺给贡献者的那条命令。
     # 它必须在**只装 [dev]** 的环境下绿 —— 曾经不绿(5 个测试裸 import torch,

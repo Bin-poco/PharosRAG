@@ -42,6 +42,10 @@ endpoints 键为**路由模板**(如 `/v1/documents/{doc_id}`,键基数有界);�
 ### GET /v1/instructions
 agent 使用契约全文(与 MCP instructions 同源):`{status, instructions}`
 
+### GET /v1/me
+返回当前已认证身份：`{status:"ok", identity_mode, name, tenant, principals, roles, admin}`。
+前端据此显示身份和上传入口；服务端仍逐请求校验权限，不信任前端显示结果。
+
 ### POST /v1/ask —— Direct / Agent / Auto 问答
 请求:`{query, mode?="direct", top_k?, rerank?=false, include_contexts?=false, doc_ids?, doc_type?, kind?, strategy?}`
 (后四个为检索过滤/选路,与 /v1/retrieve 同语义;数字/表格题用 `kind:"table"` 显著提升命中)
