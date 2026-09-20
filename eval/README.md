@@ -92,6 +92,29 @@ set -a; source .env.mac; set +a
 其检索/LLM 调用数，报告中显示为 `—`；延迟和
 语义质量仍可做严格配对比较。
 
+### V2 题库（待人工审核）
+
+[`official_agent_gold_v2.json`](official_agent_gold_v2.json) 在保留 v1 原文件及其 26 个题目 ID 的基础上，
+修订了 3 道有歧义的题目和 2 道题的引用来源要求，并增加 6 道边界题，共 32 题
+（single 9、multi_section 6、cross_doc 12、no_answer 5）。
+新增题覆盖重计算任务选择、Celery 子进程丢失时的晚确认、Qdrant 已有 collection 的副本及分布式快照、
+prefetch 分页、Compose 构建秘密和 FastAPI 挂载子应用的 lifespan。
+`multi_qdrant_storage` 因加入 Indexing 文档，被重分类为 cross_doc，但保留旧 ID 用于定位旧题；
+它以及另外两道改题的 v1/v2 分数**不能当作同题同标准直接比较**。详细复核依据见
+[`GOLD_REVIEW_2026-09-19.md`](GOLD_REVIEW_2026-09-19.md)。
+
+默认 `--suite` 仍指向 26 题的 v1；需要运行新版时显式指定：
+
+```bash
+set -a; source .env.mac; set +a
+.venv/bin/python eval/agent_benchmark.py --suite eval/official_agent_gold_v2.json --profile all --judge none
+```
+
+上述命令会调用真实服务与在线生成模型，运行前确认服务、知识库与调用费用。本次只做了本地题库结构、
+manifest 和来源文件检查，并由项目外模型做了[32 题证据复核](GOLD_V2_AI_SOURCE_REVIEW_2026-09-19.md)。
+复核模型也协助编写了 v2，不是独立人工标注者；**尚未运行 v2 在线评测或人工逐题签收**，
+`human_review` 保持 `pending`。
+
 ## 四个指标(run_eval)
 
 - **检索召回@k / MRR**(组件层):golden chunk 有没有被召回、排第几 —— 只看检索,不看生成。

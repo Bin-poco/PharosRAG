@@ -66,6 +66,39 @@ def test_official_gold_is_valid_balanced_and_references_manifest():
     agent_benchmark.validate_corpus_scope(suite, agent_benchmark.manifest_doc_ids())
 
 
+def test_official_gold_v2_preserves_v1_and_covers_reviewed_boundaries():
+    v1 = agent_benchmark.load_suite()
+    v2 = agent_benchmark.load_suite(ROOT / "eval" / "official_agent_gold_v2.json")
+    cases = v2["cases"]
+    by_id = {case["id"]: case for case in cases}
+
+    assert v1["version"] == 1 and v2["version"] == 2
+    assert len(cases) == 32
+    assert [case["id"] for case in cases[:26]] == [case["id"] for case in v1["cases"]]
+    assert Counter(case["category"] for case in cases) == {
+        "single": 9, "multi_section": 6, "cross_doc": 12, "no_answer": 5,
+    }
+    assert v2["provenance"]["human_review"] == "pending"
+    assert v2["provenance"]["ai_source_review"]["status"] == "completed_2026-09-19"
+    assert len(by_id) == len(cases)
+    assert all(case["gold"]["required_facts"] for case in cases
+               if case["category"] != "no_answer")
+    assert all(not case["gold"]["should_refuse"] for case in cases[26:])
+    assert by_id["multi_qdrant_storage"]["category"] == "cross_doc"
+    assert by_id["cross_fastapi_background_celery"]["gold"]["citation_doc_groups"] == [
+        ["fastapi__background_tasks"], ["celery__first_steps"], ["celery__tasks"],
+    ]
+    assert by_id["cross_docker_networking"]["gold"]["citation_doc_groups"] == [
+        ["docker__compose_networking"], ["docker__bridge_network"],
+        ["docker__port_publishing"],
+    ]
+    agent_benchmark.validate_corpus_scope(v2, agent_benchmark.manifest_doc_ids())
+    for case in cases:
+        for doc_id in case["doc_ids"]:
+            source_dir = ROOT / "data" / "parsed" / doc_id
+            assert (source_dir / "source.md").is_file() or (source_dir / "source.rst").is_file()
+
+
 def test_check_response_accepts_complete_grounded_result():
     result = agent_benchmark.check_response(_positive_case(), _response())
 
