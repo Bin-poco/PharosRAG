@@ -37,7 +37,7 @@
 
 ## 阶段 3：补齐真正的 Agentic RAG（第 3 周）
 
-**MVP 已完成，评估实验待完成。** 当前已有 `/v1/ask` 的 `direct|agent|auto` 三模式和
+**MVP 与首轮 V2 配对评测已完成，独立语义审核待完成。** 当前已有 `/v1/ask` 的 `direct|agent|auto` 三模式和
 `/v1/agent/ask` 显式入口；Agent 会判断证据、生成定向补检词、合并去重、输出 trace，并受检索次数、
 LLM 调用次数、总步数和超时硬预算约束。实现说明见 `docs/AGENTIC_RAG.md`。
 
@@ -51,8 +51,10 @@ LLM 调用次数、总步数和超时硬预算约束。实现说明见 `docs/AGE
 6. 达到最大轮数仍证据不足时明确拒答。
 
 每一步输出 trace，限制最大工具调用次数，并用评估集证明多跳策略在哪些问题上优于一次性 RAG。
-前两项已经实现；下一项工作是建立多跳/跨文档子集，对比 direct、agent、auto 的正确率、引用正确率、
-P95 延迟和调用成本。仅仅“接了 MCP”不算完成 Agentic RAG。
+32 题 V2 已覆盖 single、multi_section、cross_doc 和 no_answer，并完成 direct、agent、auto 共 96 次
+真实配对运行；程序化引用契约与延迟结果见 `eval/V2_BENCHMARK_2026-09-20.md`。下一项工作是人工逐题签收
+或使用异厂独立裁判补齐正确率、忠实度和必需事实召回。仅仅“接了 MCP”不算完成 Agentic RAG，
+程序化契约通过也不能写成语义答案正确。
 
 ## 阶段 4：从命令行项目变成产品（已完成）
 

@@ -13,6 +13,9 @@
   [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
 - ✅ **轻量 Web UI**：Next.js 前端已覆盖 API Key 登录、Direct/Auto/Agent 问答、引用与 trace、
   检索实验、Markdown/PDF 上传、任务状态和文档生命周期管理；前端 lint/build 已纳入 CI。
+- ✅ **Agent V2 配对评测**：32 题、三模式、96 次真实运行已完成；记录程序化契约、引用来源组、
+  拒答、延迟和调用预算。独立语义裁判与人工签收仍待完成，见
+  [V2_BENCHMARK_2026-09-20.md](../eval/V2_BENCHMARK_2026-09-20.md)。
 
 ## 候选(按优先级)
 

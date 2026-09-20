@@ -110,10 +110,11 @@ set -a; source .env.mac; set +a
 .venv/bin/python eval/agent_benchmark.py --suite eval/official_agent_gold_v2.json --profile all --judge none
 ```
 
-上述命令会调用真实服务与在线生成模型，运行前确认服务、知识库与调用费用。本次只做了本地题库结构、
+上述命令会调用真实服务与在线生成模型，运行前确认服务、知识库与调用费用。题库已完成本地结构、
 manifest 和来源文件检查，并由项目外模型做了[32 题证据复核](GOLD_V2_AI_SOURCE_REVIEW_2026-09-19.md)。
-复核模型也协助编写了 v2，不是独立人工标注者；**尚未运行 v2 在线评测或人工逐题签收**，
-`human_review` 保持 `pending`。
+2026-09-20 已用 `judge=none` 完成 32 题、三模式、96 次真实配对运行，结果见
+[`V2_BENCHMARK_2026-09-20.md`](V2_BENCHMARK_2026-09-20.md)。复核模型也协助编写了 v2，
+不是独立人工标注者；**尚未完成人工逐题签收或独立语义裁判**，`human_review` 保持 `pending`。
 
 ## 四个指标(run_eval)
 
