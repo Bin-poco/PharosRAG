@@ -131,6 +131,8 @@ class PharosConfig:
     port: int = 8787
     api_key: str = ""            # legacy 单密钥模式(单人门槛)
     keys_file: str = ""          # keys 模式(团队,D10):JSON 文件路径,配了即启用多身份
+    rate_limit_rps: float = 0.0  # 每 key 每秒补充令牌数；0=关闭(本地默认)
+    rate_limit_burst: int = 10   # 每 key 突发容量；限流为单进程，不跨副本共享
     log_dir: str = ""            # 请求日志目录(D11);空=关
     log_queries: bool = True     # 日志是否含 query 文本(截断;内网默认开)
     max_context_tokens: int = 12000
@@ -204,6 +206,8 @@ def from_env() -> PharosConfig:
         port=_int_env("PHAROS_PORT", 8787),
         api_key=os.environ.get("PHAROS_API_KEY", "").strip(),
         keys_file=os.path.expanduser(os.environ.get("PHAROS_KEYS_FILE", "").strip()),
+        rate_limit_rps=_float_env("PHAROS_RATE_LIMIT_RPS", 0.0),
+        rate_limit_burst=_int_env("PHAROS_RATE_LIMIT_BURST", 10),
         log_dir=os.path.expanduser(os.environ.get("PHAROS_LOG_DIR", "~/pharos_logs").strip()),
         log_queries=os.environ.get("PHAROS_LOG_QUERIES", "on").strip().lower() not in ("off", "0", "false"),
         smart_ask=os.environ.get("PHAROS_SMART_ASK", "on").strip().lower() not in ("off", "0", "false"),

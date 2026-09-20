@@ -17,6 +17,7 @@ HTTP 客户端不能经参数改身份;tenant 未设则一切 fail-closed 返回
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__, config, engine, identity as identity_mod, smart, toolcore
 from .obs import RequestLog, Stats
+from .rate_limit import KeyRateLimiter
 from .sessions import SessionRegistry
 from .ingestion import build_mineru_client, is_transient_ingestion_error
 from .jobs import CeleryJobDispatcher, SQLJobRepository
@@ -142,6 +144,10 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
     state.upload_manager_lock = threading.Lock()
     state.task_dispatcher = task_dispatcher
     state.task_dispatcher_lock = threading.Lock()
+    if not math.isfinite(cfg.rate_limit_rps) or cfg.rate_limit_rps < 0 or cfg.rate_limit_burst < 1:
+        raise SystemExit("PHAROS_RATE_LIMIT_RPS 不得为负，PHAROS_RATE_LIMIT_BURST 必须至少为 1。")
+    state.rate_limiter = (KeyRateLimiter(cfg.rate_limit_rps, cfg.rate_limit_burst)
+                          if cfg.rate_limit_rps > 0 and mode != "open" else None)
 
     def _current_user(request: Request):
         """本次请求的引擎 User。keys 模式按解析出的身份现建(多身份核心);legacy/open 用启动绑定的。"""
@@ -245,6 +251,13 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                     return JSONResponse({"status": "unauthorized",
                                          "hint": "缺少或错误的 X-API-Key(服务端设置了 PHAROS_API_KEY)。"},
                                         status_code=401)
+            if request.url.path.startswith("/v1/") and state.rate_limiter is not None:
+                allowed, retry_after = state.rate_limiter.allow(k)
+                if not allowed:
+                    return JSONResponse(
+                        {"status": "rate_limited", "retriable": True,
+                         "hint": "请求过于频繁，请稍后重试。", "retry_after": retry_after},
+                        status_code=429, headers={"Retry-After": str(retry_after)})
         return await call_next(request)
 
     # ---------- 观测(D11):计时 + 请求日志(不落 key 本体;截断在 obs 层)----------

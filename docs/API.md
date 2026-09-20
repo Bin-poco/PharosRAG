@@ -11,11 +11,18 @@ tenant/principals 传给引擎 ACL(决定"能看什么");未知/缺失 key → `
 模式下需 **admin** key(否则 `403`)。上传需 `uploader` role 或 admin;服务端自动把
 `user:<name>` 加入该身份的检索 principals，用于“仅上传者可见”。
 
+可通过 `PHAROS_RATE_LIMIT_RPS`（每秒令牌数，默认 0=关闭）和 `PHAROS_RATE_LIMIT_BURST`
+（突发容量，默认 10）开启鉴权后的 per-key 令牌桶。超限返回 HTTP `429`：
+`{"status":"rate_limited","retriable":true,"retry_after":N,"hint":"…"}`，并带 `Retry-After: N`。
+`/healthz`、`/readyz` 免限流；open 模式无 key，暂不应用此策略。桶只保存加盐哈希，不存原始 key。
+当前是**单进程**限流：多副本各自计数，不能将它当作全局配额；全局配额需共享存储或网关。
+
 ## 通用约定
 
 - **检索/问答领域结果 HTTP 200 + `status` 字段**(客户端按状态机决策);上传接口按 REST 语义
   返回 `202/400/403/413/415/503`。其余 HTTP 码:
-  `401`(鉴权失败)、`403`(stats 非 admin)、`422`(请求体不是合法 JSON/字段类型错)、`5xx`(崩溃)。
+  `401`(鉴权失败)、`403`(stats 非 admin)、`429`(per-key 限流)、
+  `422`(请求体不是合法 JSON/字段类型错)、`5xx`(崩溃)。
 - **status 状态机**(与引擎 toolcore 契约一致):`ok` / `empty` / `no_identity` / `empty_query` /
   `bad_arg` / `no_access`(无权与不存在同响应,不泄存在性)/ `config_error`(sidecar 需重建)/
   `backend_unavailable`(retriable)/ `contract_mismatch`(MCP 适配器专属:守护进程返回非 401 的
