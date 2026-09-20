@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import threading
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -25,11 +27,12 @@ class IngestionPipeline:
 
     def __init__(self, root: str | Path, retriever, *,
                  mineru_client: MinerUClient | None = None,
-                 embedder_factory=None):
+                 embedder_factory=None, publish_guard):
         self.root = Path(root).expanduser().resolve()
         self.retriever = retriever
         self.mineru_client = mineru_client
         self.embedder_factory = embedder_factory or Embedder
+        self.publish_guard = publish_guard
         self._embedder = None
         self._lock = threading.Lock()
 
@@ -62,8 +65,7 @@ class IngestionPipeline:
         doc_dir = self._doc_dir(document_id)
         parsed_dir = doc_dir / "parsed"
         attempt = int(record.get("attempts", 1))
-        attempt_dir = doc_dir / f".parsed-{record['job_id']}-{attempt}.tmp"
-        shutil.rmtree(attempt_dir, ignore_errors=True)
+        attempt_dir = doc_dir / f".parsed-{record['job_id']}-{attempt}-{uuid.uuid4().hex}.tmp"
         attempt_dir.mkdir(parents=True, exist_ok=False)
         layout = None
         try:
@@ -98,30 +100,28 @@ class IngestionPipeline:
             (attempt_dir / "metadata.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-            # 只有完整解析成功后才替换正式产物；失败尝试不会污染下一次执行。
-            shutil.rmtree(parsed_dir, ignore_errors=True)
-            os.replace(attempt_dir, parsed_dir)
-            image_root = parsed_dir / image_relative
-        except Exception:
-            shutil.rmtree(attempt_dir, ignore_errors=True)
-            raise
+            update_stage(stage="chunking", parser_batch_id=parser_batch_id)
+            elements = from_mineru(content, layout)
+            sample = "".join((element.text or "") for element in elements[:40])[:2000]
+            result = Chunker().chunk(
+                elements, doc_id=document_id, doc_type="technical_document",
+                lang="ch" if any("\u4e00" <= c <= "\u9fff" for c in sample) else "en",
+                doc_meta=metadata, acl=record["acl"],
+            )
 
-        update_stage(stage="chunking", parser_batch_id=parser_batch_id)
-        elements = from_mineru(content, layout)
-        sample = "".join((element.text or "") for element in elements[:40])[:2000]
-        result = Chunker().chunk(
-            elements,
-            doc_id=document_id,
-            doc_type="technical_document",
-            lang="ch" if any("\u4e00" <= c <= "\u9fff" for c in sample) else "en",
-            doc_meta=metadata,
-            acl=record["acl"],
-        )
-        update_stage(stage="embedding")
-        stats = self._get_embedder().index_document(
-            document_id, elements, result, image_root=str(image_root))
-        return {
-            **stats,
-            "chunk_count": int(stats.get("indexed", len(result.chunks))),
-            "parser_batch_id": parser_batch_id,
-        }
+            @contextmanager
+            def publish():
+                with self.publish_guard(record):
+                    yield
+                    # 只有当前执行的向量/sidecar 发布成功后，才替换正式解析目录。
+                    shutil.rmtree(parsed_dir, ignore_errors=True)
+                    os.replace(attempt_dir, parsed_dir)
+
+            update_stage(stage="embedding")
+            stats = self._get_embedder().index_document(
+                document_id, elements, result, image_root=str(attempt_dir / image_relative),
+                publish_guard=publish)
+            return {**stats, "chunk_count": int(stats.get("indexed", len(result.chunks))),
+                    "parser_batch_id": parser_batch_id}
+        finally:
+            shutil.rmtree(attempt_dir, ignore_errors=True)

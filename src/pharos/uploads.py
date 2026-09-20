@@ -203,6 +203,7 @@ class DocumentUploadManager:
                     mineru_client=self.mineru_client,
                     # 保留 uploads.Embedder 这个替换点，兼容既有测试和调用方。
                     embedder_factory=lambda *args, **kwargs: Embedder(*args, **kwargs),
+                    publish_guard=self.repository.publish_guard,
                 )
             return self._pipeline
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,6 +34,14 @@ def _iso(value) -> str | None:
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _require_execution(current: dict | None, claimed: dict) -> None:
+    """校验具体的一次执行，不只校验可能被重投消息复用的 Worker 名。"""
+    if (current is None or current.get("job_status") != "running" or
+            any(current.get(key) != claimed.get(key)
+                for key in ("job_id", "worker_id", "attempts"))):
+        raise UploadError("lease_lost", "任务执行权已失效，禁止发布索引。")
 
 
 class FileJobRepository:
@@ -73,6 +82,14 @@ class FileJobRepository:
         with self._lock:
             self._write(record)
         return dict(record)
+
+    @contextmanager
+    def publish_guard(self, claimed: dict):
+        """本地单进程模式：检查与产物发布共用生命周期操作的锁。"""
+        with self._lock:
+            current = self._read(claimed["document_id"])
+            _require_execution(current, claimed)
+            yield
 
     def get_job(self, job_id: str) -> dict | None:
         for path in self.root.glob("upload__*/record.json"):
@@ -311,6 +328,30 @@ class SQLJobRepository:
         self.engine = create_engine(database_url, **kwargs)
         if create_schema:
             Base.metadata.create_all(self.engine)
+
+    @contextmanager
+    def publish_guard(self, claimed: dict):
+        """短发布阶段锁定 job + document，禁止恢复/删除/权限变更在检查后插入。
+
+        编码和解析必须在锁外完成。SQLite 不支持 FOR UPDATE，测试/本地模式用
+        BEGIN IMMEDIATE；生产 PostgreSQL 使用与其他生命周期操作相同的行锁。
+        这不是数据库与 Qdrant 的分布式事务，发布中断仍走既有失败重试。
+        """
+        with Session(self.engine) as session:
+            if self.engine.dialect.name == "sqlite":
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            else:
+                session.begin()
+            try:
+                row = self._load(session, document_id=claimed["document_id"], for_update=True)
+                _require_execution(self._record(row[1], row[0]) if row else None, claimed)
+                yield
+                # 刷新后再解锁，避免发布期间被阻塞的心跳使任务立刻被判失联。
+                row[0].heartbeat_at = utcnow()
+                session.commit()
+            except BaseException:
+                session.rollback()
+                raise
 
     @staticmethod
     def _record(document: DocumentRow, job: IngestionJobRow) -> dict:

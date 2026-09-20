@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from contextlib import contextmanager
 
 from .. import config
@@ -42,7 +43,8 @@ def _heartbeat(repository, job_id: str, worker_id: str, interval_seconds: int):
 @app.task(bind=True, name="pharos.ingest_document", max_retries=None)
 def ingest_document(self, job_id: str):
     task_id = self.request.id or "unknown-task"
-    worker_id = f"{self.request.hostname or 'celery-worker'}:{task_id}"
+    # 同一个 Celery 消息可能重投；每次执行必须有独立租约身份。
+    worker_id = f"{self.request.hostname or 'celery-worker'}:{task_id}:{uuid.uuid4().hex}"
     log.info("ingestion task received: job=%s worker=%s", job_id, worker_id)
     try:
         runtime = get_runtime()

@@ -13,6 +13,7 @@ import os
 import sys
 import uuid
 from dataclasses import asdict
+from contextlib import nullcontext
 from pathlib import Path
 
 from qdrant_client import models
@@ -65,7 +66,8 @@ class Embedder:
             return None
         return str(candidate)
 
-    def index_document(self, doc_id: str, elements: list, chunk_result, image_root: str) -> dict:
+    def index_document(self, doc_id: str, elements: list, chunk_result, image_root: str,
+                       *, publish_guard=None) -> dict:
         """elements: 原始 list[Element](idx 对齐);chunk_result: ChunkResult;
         image_root: MinerU 输出根目录(拼 image_path 绝对路径,= parsed/<doc>/)。
 
@@ -98,11 +100,13 @@ class Embedder:
         deleted = False
         try:
             # 删旧仍在 upsert 前:重索引若变短,旧高编号 point 不会被覆盖 -> 删旧防孤儿(review#4 动机不变)
-            self.store.delete_by_doc(doc_id)
-            deleted = True
-            if points:
-                self.store.upsert(points)
-            os.replace(tmp, path)          # 同盘原子改名:新向量与新 sidecar 同代落地(seal#9)
+            # 先准备，后在租约锁内发布；只做一次发布前检查仍存在 TOCTOU 竞态。
+            with publish_guard() if publish_guard is not None else nullcontext():
+                self.store.delete_by_doc(doc_id)
+                deleted = True
+                if points:
+                    self.store.upsert(points)
+                os.replace(tmp, path)
         except Exception as e:
             try:
                 os.remove(tmp)             # 清理准备产物;失败不掩盖主异常
@@ -127,11 +131,15 @@ class Embedder:
             "acl_index": {str(k): v for k, v in chunk_result.acl_index().items()},
         }
         path = os.path.join(self.cfg.sidecar_dir, f"{doc_id}.json")
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
+        tmp = path + f".{uuid.uuid4().hex}.tmp"
+        try:
+            with open(tmp, "x", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
         return tmp, path
 
     def _write_sidecar(self, doc_id: str, elements: list, chunk_result) -> None:

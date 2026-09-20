@@ -56,9 +56,10 @@ def test_upload_manager_persists_and_indexes_markdown(tmp_path, monkeypatch):
         def __init__(self, cfg, store=None, dense=None):
             pass
 
-        def index_document(self, doc_id, elements, result, image_root):
-            indexed["calls"] += 1
-            indexed.update(doc_id=doc_id, elements=elements, result=result, image_root=image_root)
+        def index_document(self, doc_id, elements, result, image_root, *, publish_guard):
+            with publish_guard():
+                indexed["calls"] += 1
+                indexed.update(doc_id=doc_id, elements=elements, result=result, image_root=image_root)
             return {"indexed": len(result.chunks)}
 
     monkeypatch.setattr(U, "Embedder", FakeEmbedder)
@@ -125,9 +126,10 @@ def test_upload_manager_parses_pdf_with_mineru_then_indexes(tmp_path, monkeypatc
         def __init__(self, cfg, store=None, dense=None):
             pass
 
-        def index_document(self, doc_id, elements, result, image_root):
-            indexed.update(doc_id=doc_id, elements=elements, chunks=result.chunks,
-                           image_root=image_root)
+        def index_document(self, doc_id, elements, result, image_root, *, publish_guard):
+            with publish_guard():
+                indexed.update(doc_id=doc_id, elements=elements, chunks=result.chunks,
+                               image_root=image_root)
             return {"indexed": len(result.chunks)}
 
     class FakeMinerU:
@@ -157,7 +159,8 @@ def test_upload_manager_parses_pdf_with_mineru_then_indexes(tmp_path, monkeypatc
     assert job["parser_batch_id"] == "batch-1"
     assert indexed["doc_id"] == record["document_id"]
     assert indexed["elements"][1].page == 1
-    assert indexed["image_root"].endswith("/parsed/result")
+    assert "/.parsed-" in indexed["image_root"]  # 编码只读本次尝试的私有目录
+    assert (tmp_path / "uploads" / record["document_id"] / "parsed" / "result").is_dir()
 
 
 def test_pdf_upload_is_rejected_before_queue_when_mineru_is_unconfigured(tmp_path):
