@@ -136,6 +136,7 @@ export default function Home() {
 
   const [file, setFile] = useState<File | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const uploadAttempt = useRef({ fingerprint: "", key: "" });
   const [scope, setScope] = useState("private");
   const [groups, setGroups] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -317,12 +318,21 @@ export default function Home() {
       const body = new FormData();
       body.set("file", file); body.set("access_scope", scope);
       if (scope === "restricted") body.set("groups", groups);
-      const response = await fetch("/api/documents", { method: "POST", body });
+      const fingerprint = [file.name, file.size, file.lastModified, scope, groups].join(":");
+      if (uploadAttempt.current.fingerprint !== fingerprint) {
+        uploadAttempt.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      const response = await fetch("/api/documents", {
+        method: "POST",
+        headers: { "Idempotency-Key": uploadAttempt.current.key },
+        body,
+      });
       const data = await json(response);
       assertResponse(response, data, ["accepted"], "上传失败");
       setUploadMessage("文件已接收，正在处理。下方可查看任务状态。");
       setJobId(typeof data.job_id === "string" ? data.job_id : "");
       setJob(null); setFile(null);
+      uploadAttempt.current = { fingerprint: "", key: "" };
       if (fileInput.current) fileInput.current.value = "";
       await loadDocuments();
     } catch (error) { setUploadMessage(error instanceof Error ? error.message : "上传失败。"); }

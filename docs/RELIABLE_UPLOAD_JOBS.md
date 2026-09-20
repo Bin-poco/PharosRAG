@@ -24,6 +24,10 @@ PostgreSQL: documents + ingestion_jobs + job_outbox
  MinerU -> Chunker -> Embedding -> Qdrant + sidecar
 ```
 
+上传入口支持按 `tenant + owner + Idempotency-Key` 去重。请求正文写入临时文档目录并完成类型、大小、
+哈希校验后，PostgreSQL 唯一索引原子决定哪个并发请求创建文档、任务和 Outbox；失败方读取胜出记录，
+同请求直接重放响应并清理临时目录，不同请求返回冲突。本地 JSON 兼容仓储在进程锁内提供同样语义。
+
 - PostgreSQL 是文档和任务状态的唯一真相来源；Redis 丢消息不会丢任务。
 - Outbox 与任务在同一事务创建，避免“数据库已有任务，但消息没有发出去”的双写裂缝。
 - 消息只带 `job_id`；Worker 按这个 `job_id` 原子领取任务，再从数据库读取可信的文件路径、tenant、owner 和 ACL。迟到的旧消息不能领取人工重试创建的新任务。

@@ -113,8 +113,65 @@ def test_upload_manager_rejects_metadata_that_exceeds_database_limits(tmp_path):
             io.BytesIO(b"# Guide"), filename="guide.md", content_type="x" * 161,
             identity=UPLOADER, access_scope="private", groups=[])
     assert exc.value.code == "content_type_too_long"
-
     assert not list((tmp_path / "uploads").glob("upload__*"))
+
+
+def test_upload_manager_replays_same_idempotency_key_without_duplicate_files(tmp_path):
+    root = tmp_path / "uploads"
+    manager = DocumentUploadManager(str(root), SimpleNamespace())
+
+    first = manager.create(
+        io.BytesIO(b"# Guide\n\nDocker volume."),
+        filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[],
+        idempotency_key="upload-20260920-1",
+    )
+    replayed = manager.create(
+        io.BytesIO(b"# Guide\n\nDocker volume."),
+        filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[],
+        idempotency_key="upload-20260920-1",
+    )
+
+    assert first["idempotency_replayed"] is False
+    assert replayed["idempotency_replayed"] is True
+    assert replayed["document_id"] == first["document_id"]
+    assert replayed["job_id"] == first["job_id"]
+    assert len(list(root.glob("upload__*"))) == 1
+
+
+def test_upload_manager_rejects_reused_idempotency_key_for_different_request(tmp_path):
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+    manager.create(
+        io.BytesIO(b"# First"), filename="guide.md", content_type="text/markdown",
+        identity=UPLOADER, access_scope="private", groups=[],
+        idempotency_key="same-key",
+    )
+
+    with pytest.raises(UploadError) as exc:
+        manager.create(
+            io.BytesIO(b"# Changed"), filename="guide.md", content_type="text/markdown",
+            identity=UPLOADER, access_scope="private", groups=[],
+            idempotency_key="same-key",
+        )
+
+    assert exc.value.code == "idempotency_conflict"
+    assert len(list((tmp_path / "uploads").glob("upload__*"))) == 1
+
+
+def test_upload_manager_validates_idempotency_key_before_writing_file(tmp_path):
+    root = tmp_path / "uploads"
+    manager = DocumentUploadManager(str(root), SimpleNamespace())
+
+    with pytest.raises(UploadError) as exc:
+        manager.create(
+            io.BytesIO(b"# Guide"), filename="guide.md", content_type="text/markdown",
+            identity=UPLOADER, access_scope="private", groups=[],
+            idempotency_key="contains spaces",
+        )
+
+    assert exc.value.code == "invalid_idempotency_key"
+    assert list(root.glob("upload__*")) == []
 
 
 def test_upload_manager_parses_pdf_with_mineru_then_indexes(tmp_path, monkeypatch):
@@ -313,13 +370,15 @@ class FakeUploadManager:
         self.records = {}
         self.processed = []
 
-    def create(self, stream, *, filename, content_type, identity, access_scope, groups):
+    def create(self, stream, *, filename, content_type, identity, access_scope, groups,
+               idempotency_key=None):
         acl = build_upload_acl(identity, access_scope, groups)
         record = {"document_id": "upload__1", "job_id": "job_1", "tenant": identity.tenant,
                   "owner": identity.name, "filename": filename, "size": len(stream.read()),
                   "sha256": "abc", "access_scope": access_scope, "groups": groups,
                   "status": "queued", "stage": "uploaded", "chunk_count": 0,
-                  "error_code": None, "created_at": "now", "updated_at": "now", "acl": acl}
+                  "error_code": None, "created_at": "now", "updated_at": "now", "acl": acl,
+                  "idempotency_replayed": False}
         self.records["job_1"] = record
         return {k: v for k, v in record.items() if k != "acl"}
 
@@ -423,6 +482,47 @@ def test_upload_http_dispatches_to_queue_when_dispatcher_is_configured():
     assert manager.processed == []
 
 
+def test_upload_http_idempotency_reuses_job_and_dispatches_once(tmp_path):
+    uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
+    manager = DocumentUploadManager(str(tmp_path / "uploads"), SimpleNamespace())
+
+    class FakeDispatcher:
+        def __init__(self):
+            self.jobs = []
+
+        def dispatch(self, job_id):
+            self.jobs.append(job_id)
+
+    dispatcher = FakeDispatcher()
+    app = make_app(
+        cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader},
+        task_dispatcher=dispatcher,
+    )
+    app.state.upload_manager = manager
+    headers = {"X-API-Key": "a" * 20, "Idempotency-Key": "browser-upload-1"}
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/v1/documents", headers=headers,
+            files={"file": ("guide.md", b"# Guide", "text/markdown")},
+        )
+        replayed = client.post(
+            "/v1/documents", headers=headers,
+            files={"file": ("guide.md", b"# Guide", "text/markdown")},
+        )
+        conflict = client.post(
+            "/v1/documents", headers=headers,
+            files={"file": ("guide.md", b"# Changed", "text/markdown")},
+        )
+
+    assert first.status_code == 202 and first.json()["idempotency_replayed"] is False
+    assert replayed.status_code == 202 and replayed.json()["idempotency_replayed"] is True
+    assert replayed.json()["document_id"] == first.json()["document_id"]
+    assert dispatcher.jobs == [first.json()["job_id"]]
+    assert conflict.status_code == 409
+    assert conflict.json()["status"] == "idempotency_conflict"
+
+
 def test_failed_upload_can_be_manually_retried_as_a_new_job():
     uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
     manager = FakeUploadManager()
@@ -480,7 +580,8 @@ def test_upload_http_maps_transient_persistence_failure_to_retriable_503():
     uploader = Identity(name="alice", tenant="t1", principals=[], roles=["uploader"])
 
     class UnavailableUploadManager(FakeUploadManager):
-        def create(self, stream, *, filename, content_type, identity, access_scope, groups):
+        def create(self, stream, *, filename, content_type, identity, access_scope, groups,
+                   idempotency_key=None):
             raise ConnectionError("database temporarily unavailable")
 
     app = make_app(cfg=make_cfg(host="0.0.0.0"), keys={"a" * 20: uploader})

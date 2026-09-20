@@ -396,13 +396,16 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
         try:
             record = _get_upload_manager().create(
                 file.file, filename=file.filename or "", content_type=file.content_type,
-                identity=iden, access_scope=access_scope, groups=requested_groups)
+                identity=iden, access_scope=access_scope, groups=requested_groups,
+                idempotency_key=request.headers.get("Idempotency-Key"))
         except UploadError as exc:
             status_code = 403 if exc.code in {
                 "upload_forbidden", "group_forbidden", "tenant_publish_forbidden"
             } else (413 if exc.code == "file_too_large" else
                     415 if exc.code in {"unsupported_type", "invalid_pdf"} else
                     503 if exc.code == "mineru_unconfigured" else 400)
+            if exc.code == "idempotency_conflict":
+                status_code = 409
             return JSONResponse({"status": exc.code, "retriable": False, "hint": str(exc)},
                                 status_code=status_code)
         except Exception as exc:
@@ -415,8 +418,10 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
                 status_code=503,
             )
         # 任务和 Outbox 已在同一数据库事务提交；broker 故障时 scheduler 会补投。
-        dispatch_delayed = _dispatch_ingestion(
-            record, background_tasks, action="ingestion")
+        dispatch_delayed = False
+        if not record.get("idempotency_replayed"):
+            dispatch_delayed = _dispatch_ingestion(
+                record, background_tasks, action="ingestion")
         # status 是 HTTP 业务状态，document_status 是异步文档状态，不能同键互盖。
         out = {**record, "document_status": record.get("status"), "status": "accepted",
                "dispatch_delayed": dispatch_delayed}

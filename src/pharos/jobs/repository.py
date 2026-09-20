@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -80,8 +81,26 @@ class FileJobRepository:
 
     def create(self, record: dict) -> dict:
         with self._lock:
+            key = record.get("idempotency_key")
+            if key:
+                for path in self.root.glob("upload__*/record.json"):
+                    try:
+                        existing = json.loads(path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if (existing.get("tenant"), existing.get("owner"),
+                            existing.get("idempotency_key")) != (
+                                record.get("tenant"), record.get("owner"), key):
+                        continue
+                    if existing.get("idempotency_fingerprint") != record.get(
+                            "idempotency_fingerprint"):
+                        raise UploadError(
+                            "idempotency_conflict",
+                            "同一个 Idempotency-Key 已用于不同的上传请求。",
+                        )
+                    return {**existing, "idempotency_replayed": True}
             self._write(record)
-        return dict(record)
+        return {**record, "idempotency_replayed": False}
 
     @contextmanager
     def publish_guard(self, claimed: dict):
@@ -386,36 +405,84 @@ class SQLJobRepository:
             "finished_at": _iso(job.finished_at),
         }
 
-    def create(self, record: dict) -> dict:
+    @staticmethod
+    def _idempotent_record(session: Session, record: dict):
+        key = record.get("idempotency_key")
+        if not key:
+            return None
+        statement = (
+            select(IngestionJobRow, DocumentRow)
+            .join(
+                DocumentRow,
+                (DocumentRow.document_id == IngestionJobRow.document_id)
+                & (DocumentRow.current_job_id == IngestionJobRow.job_id),
+            )
+            .where(
+                DocumentRow.tenant == record["tenant"],
+                DocumentRow.owner == record["owner"],
+                DocumentRow.idempotency_key == key,
+            )
+        )
+        return session.execute(statement).first()
+
+    def _replay_or_conflict(self, row, record: dict) -> dict | None:
+        if row is None:
+            return None
+        job, document = row
+        if document.idempotency_fingerprint != record.get("idempotency_fingerprint"):
+            raise UploadError(
+                "idempotency_conflict",
+                "同一个 Idempotency-Key 已用于不同的上传请求。",
+            )
+        return {**self._record(document, job), "idempotency_replayed": True}
+
+    def _insert(self, session: Session, record: dict) -> dict:
         now = _as_datetime(record.get("created_at"))
-        with Session(self.engine) as session, session.begin():
-            document = DocumentRow(
-                document_id=record["document_id"], tenant=record["tenant"],
-                owner=record["owner"], filename=record["filename"],
-                content_type=record["content_type"], source_format=record["source_format"],
-                size=record["size"], sha256=record["sha256"],
-                access_scope=record["access_scope"], groups=record["groups"],
-                acl=record["acl"], source_path=record["source_path"], status="queued",
-                chunk_count=0, current_job_id=record["job_id"],
-                created_at=now, updated_at=now,
-            )
-            job = IngestionJobRow(
-                job_id=record["job_id"], document_id=record["document_id"],
-                status="queued", stage="uploaded", attempts=0,
-                max_attempts=int(record.get("max_attempts", 3)), available_at=now,
-                created_at=now, updated_at=now,
-            )
-            session.add(document)
-            session.flush()
-            session.add(job)
-            session.flush()
-            session.add(OutboxRow(
-                job_id=job.job_id, event_type="ingestion.requested",
-                payload={"job_id": job.job_id}, status="pending", attempts=0,
-                next_attempt_at=now, created_at=now, updated_at=now,
-            ))
-            session.flush()
-            return self._record(document, job)
+        document = DocumentRow(
+            document_id=record["document_id"], tenant=record["tenant"],
+            owner=record["owner"], filename=record["filename"],
+            content_type=record["content_type"], source_format=record["source_format"],
+            size=record["size"], sha256=record["sha256"],
+            access_scope=record["access_scope"], groups=record["groups"],
+            acl=record["acl"], source_path=record["source_path"], status="queued",
+            chunk_count=0, current_job_id=record["job_id"],
+            idempotency_key=record.get("idempotency_key"),
+            idempotency_fingerprint=record.get("idempotency_fingerprint"),
+            created_at=now, updated_at=now,
+        )
+        job = IngestionJobRow(
+            job_id=record["job_id"], document_id=record["document_id"],
+            status="queued", stage="uploaded", attempts=0,
+            max_attempts=int(record.get("max_attempts", 3)), available_at=now,
+            created_at=now, updated_at=now,
+        )
+        session.add(document)
+        session.flush()
+        session.add(job)
+        session.flush()
+        session.add(OutboxRow(
+            job_id=job.job_id, event_type="ingestion.requested",
+            payload={"job_id": job.job_id}, status="pending", attempts=0,
+            next_attempt_at=now, created_at=now, updated_at=now,
+        ))
+        session.flush()
+        return {**self._record(document, job), "idempotency_replayed": False}
+
+    def create(self, record: dict) -> dict:
+        try:
+            with Session(self.engine) as session, session.begin():
+                replayed = self._replay_or_conflict(
+                    self._idempotent_record(session, record), record)
+                return replayed or self._insert(session, record)
+        except IntegrityError:
+            # 两个进程可能同时没查到旧记录；唯一索引只允许一个事务胜出。
+            # 失败方重新读取胜出的记录，并按同请求/不同请求决定重放或冲突。
+            with Session(self.engine) as session:
+                replayed = self._replay_or_conflict(
+                    self._idempotent_record(session, record), record)
+                if replayed is not None:
+                    return replayed
+            raise
 
     def _load(self, session: Session, *, job_id: str | None = None,
               document_id: str | None = None, for_update: bool = False):

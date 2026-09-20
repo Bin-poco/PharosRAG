@@ -11,6 +11,8 @@
 - ✅ **可靠摄取任务**：PostgreSQL 保存文档/任务/Outbox，Redis + Celery 异步执行；支持指数退避、
   Worker 心跳、失联恢复、租约防旧 Worker 覆盖，以及保留历史的人工重试。设计和故障演练见
   [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
+- ✅ **上传幂等**：客户端可复用 `Idempotency-Key` 安全重试；服务端按 tenant + owner 隔离，使用
+  请求指纹识别冲突，并由数据库唯一索引保证并发请求只创建一份文档、任务和 Outbox。
 - ✅ **轻量 Web UI**：Next.js 前端已覆盖 API Key 登录、Direct/Auto/Agent 问答、引用与 trace、
   检索实验、Markdown/PDF 上传、任务状态和文档生命周期管理；前端 lint/build 已纳入 CI。
 - ✅ **Agent V2 配对评测**：32 题、三模式、96 次真实运行已完成；记录程序化契约、引用来源组、

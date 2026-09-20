@@ -34,12 +34,18 @@ class DocumentRow(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     parser_batch_id: Mapped[str | None] = mapped_column(String(160))
     current_job_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    idempotency_fingerprint: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         Index("ix_documents_tenant_owner", "tenant", "owner"),
         Index("ix_documents_tenant_sha256", "tenant", "sha256"),
+        Index(
+            "uq_documents_tenant_owner_idempotency_key",
+            "tenant", "owner", "idempotency_key", unique=True,
+        ),
     )
 
 

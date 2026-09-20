@@ -130,6 +130,11 @@ tenant/owner 只取 `X-API-Key` 解析出的身份，客户端无参数可覆盖
 }
 ```
 
+客户端应为一次逻辑上传生成 `Idempotency-Key` 请求头（1–128 位字母、数字或 `._:-`），网络超时后
+重试时复用同一个值。同一 tenant、同一上传者下，同键同文件及同权限会返回原来的
+`document_id/job_id`，并带 `idempotency_replayed=true`，不会重复投递任务；同键但文件或权限不同
+返回 `409 idempotency_conflict`。不传该头时保留每次创建新文档的兼容行为。
+
 Markdown 在本地标准化；PDF 使用 MinerU 精准解析 API(`vlm`)提取正文、标题层级、页码、表格和
 图片，再进入同一条切块/建库链。PDF 需在服务环境中配置 `MINERU_TOKEN_A`，也可通过
 `PHAROS_MINERU_TOKEN_ENV` 改用其他变量名；未配置时 PDF 上传直接返回 `503 mineru_unconfigured`，
