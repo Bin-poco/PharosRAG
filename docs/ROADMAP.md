@@ -13,6 +13,8 @@
   [RELIABLE_UPLOAD_JOBS.md](RELIABLE_UPLOAD_JOBS.md)。
 - ✅ **上传幂等**：客户端可复用 `Idempotency-Key` 安全重试；服务端按 tenant + owner 隔离，使用
   请求指纹识别冲突，并由数据库唯一索引保证并发请求只创建一份文档、任务和 Outbox。
+- ✅ **有界答案续写**：生成达到 `max_tokens` 后最多续写指定次数，Agent 续写计入总 LLM 调用预算；
+  最终仍截断时显式返回 `truncated` 和提示，不把半截答案伪装成完整答案。
 - ✅ **轻量 Web UI**：Next.js 前端已覆盖 API Key 登录、Direct/Auto/Agent 问答、引用与 trace、
   检索实验、Markdown/PDF 上传、任务状态和文档生命周期管理；前端 lint/build 已纳入 CI。
 - ✅ **Agent V2 配对评测**：32 题、三模式、96 次真实运行已完成；记录程序化契约、引用来源组、

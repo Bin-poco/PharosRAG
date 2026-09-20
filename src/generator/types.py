@@ -31,3 +31,7 @@ class Answer:
     # 与返回的第一轮答案错位)。零召回不调 LLM 时为 None。
     finish_reason: str | None = None
     raw_messages: list[Message] = field(default_factory=list)   # 调试:发给 LLM 的 messages
+    # 生成阶段实际使用的 LLM 调用数。零召回不调用模型时为 0；自动续写会大于 1。
+    generation_calls: int = 0
+    # 因 finish_reason=length 触发并成功执行的续写次数。
+    continuations: int = 0

@@ -61,14 +61,18 @@ agent 使用契约全文(与 MCP instructions 同源):`{status, instructions}`
 {"status":"ok", "answer":"…带 [cite:n] 的答案…",
  "citations":[{"marker":1,"chunk_id":"…#0062","doc_id":"…","title":"…","section":"…","page":18,
                "text":"(仅 include_contexts=true)"}],
- "n_contexts":5, "model":"deepseek-v4-flash", "finish_reason":"stop|length|…"}
+ "n_contexts":5, "model":"deepseek-v4-flash", "finish_reason":"stop|length|…",
+ "truncated":false, "generation_calls":2, "continuations":1}
 ```
-`finish_reason=length` = 答案被 max_tokens 截断(尾部引用可能被切)。该值与 `answer` **同轮快照**
-(smart-ask 重试被弃用时是第一轮的值,不是被丢弃那轮的);零召回不调 LLM 时为 `null`。
+单次生成被 `max_tokens` 截断时，服务默认最多续写一次（`PHAROS_LLM_MAX_CONTINUATIONS`，设 0 关闭），
+续写只沿用同一批证据和引用编号。Agent 模式的续写也计入 `PHAROS_AGENT_MAX_LLM_CALLS` 硬预算。
+`generation_calls` 是本次答案的生成调用数（不含 Agent 证据判断），`continuations` 是续写次数。
+若最终仍为 `finish_reason=length`，`truncated=true`，`hints` 会说明答案未完；不能把它当完整答案。
+结束原因与 `answer` **同轮快照**（smart-ask 重试被弃用时是第一轮的值）；零召回不调 LLM 时为 `null`。
 
 smart-ask(默认开,`PHAROS_SMART_ASK=off` 关;设计见 DESIGN D9):响应另含
 `auto: ["table_leg_retry"?]`(自动动作留痕——数值题第一轮拒答时带 kind=table 补检腿重问一轮)与
-`hints: [...]`(仅当最终答案仍为拒答/部分拒答时,≤3 条可操作建议;正常答案为空数组)。
+`hints: [...]`(拒答/部分拒答时给可操作建议；答案仍截断时另给预算提示；完整正常答案为空数组)。
 smart-ask 属于 `direct` 路径；Agent 路径由自己的证据循环决定是否补检。
 
 当 `mode=agent|auto` 时，响应额外包含：

@@ -634,10 +634,15 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
         hints = (smart.build_hints(q.query, auto=[], req_kind=q.kind, req_rerank=q.rerank,
                                    numeric=numeric)
                  if cfg.smart_ask and smart.is_refusal(run.answer.text) else [])
+        if run.answer.finish_reason == "length":
+            hints.append("答案达到生成预算，已返回可验证部分；可缩小问题范围或提高 PHAROS_LLM_MAX_TOKENS。")
         out = {
             "status": "ok", "answer": run.answer.text, "citations": citations,
             "n_contexts": run.answer.n_contexts, "model": cfg.llm_model,
             "finish_reason": run.answer.finish_reason,
+            "truncated": run.answer.finish_reason == "length",
+            "generation_calls": run.answer.generation_calls,
+            "continuations": run.answer.continuations,
             "route": {"requested_mode": run.requested_mode,
                       "selected_mode": run.selected_mode,
                       "reasons": run.route_reasons},
@@ -706,11 +711,16 @@ def create_app(cfg: config.PharosConfig | None = None, retriever=None, user=None
         hints = (smart.build_hints(q.query, auto=auto, req_kind=q.kind, req_rerank=q.rerank,
                                    numeric=numeric)
                  if cfg.smart_ask and smart.is_refusal(ans.text) else [])
+        if ans.finish_reason == "length":
+            hints.append("答案达到生成预算，已返回可验证部分；可缩小问题范围或提高 PHAROS_LLM_MAX_TOKENS。")
         # finish_reason 读 Answer 快照而非 gen.llm 实例属性:重试被弃用时实例上残留第二轮的值(与返回的
         # 第一轮答案错位),零召回时残留同线程上一请求的值 —— 快照随答案走,天然对齐。
         return _log(request, {"status": "ok", "answer": ans.text, "citations": citations,
                               "n_contexts": ans.n_contexts, "model": cfg.llm_model,
                               "finish_reason": ans.finish_reason,
+                              "truncated": ans.finish_reason == "length",
+                              "generation_calls": ans.generation_calls,
+                              "continuations": ans.continuations,
                               "auto": auto, "hints": hints},
                     query=q.query, auto=auto or None, n_citations=len(citations), refusal=bool(hints))
 

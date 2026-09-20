@@ -75,6 +75,46 @@ def test_auto_simple_query_stays_direct():
     assert retriever.calls[0]["tenant"] == "t1"
 
 
+def test_answer_continuation_counts_against_agent_llm_budget():
+    class _LengthThenStopLLM:
+        def __init__(self):
+            self.calls = 0
+            self.last_finish_reason = None
+
+        def complete(self, messages):
+            self.calls += 1
+            self.last_finish_reason = "length" if self.calls == 1 else "stop"
+            return "前半 [cite:1]" if self.calls == 1 else "后半 [cite:1]"
+
+    retriever = _QueryRetriever({"简单问题": [_row("c1", "证据")]})
+    llm = _LengthThenStopLLM()
+    generator = Generator(retriever, llm, max_continuations=1)
+    runner = AgenticRunner(generator, limits=AgentLimits(max_llm_calls=2))
+    run = runner.run("简单问题", make_user(), mode="auto")
+    assert run.llm_calls == 2 and llm.calls == 2
+    assert run.answer.continuations == 1 and run.answer.finish_reason == "stop"
+    assert run.trace[-1]["continuations"] == 1
+
+
+def test_answer_continuation_cannot_exceed_agent_llm_budget():
+    class _AlwaysLengthLLM:
+        def __init__(self):
+            self.calls = 0
+            self.last_finish_reason = "length"
+
+        def complete(self, messages):
+            self.calls += 1
+            return "部分答案 [cite:1]"
+
+    retriever = _QueryRetriever({"简单问题": [_row("c1", "证据")]})
+    llm = _AlwaysLengthLLM()
+    generator = Generator(retriever, llm, max_continuations=2)
+    runner = AgenticRunner(generator, limits=AgentLimits(max_llm_calls=1))
+    run = runner.run("简单问题", make_user(), mode="auto")
+    assert run.llm_calls == 1 and llm.calls == 1
+    assert run.answer.finish_reason == "length" and run.answer.continuations == 0
+
+
 def test_auto_zero_recall_escalates_and_recovers():
     decisions = [
         '{"sufficient":false,"reason_code":"no_evidence","missing":["Docker evidence"],'
