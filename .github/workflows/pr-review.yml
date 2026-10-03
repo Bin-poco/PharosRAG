@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: "Bin-poco/pr-review-harness"
-          ref: '95663adbf2a8f77d3c71fa5407eb43d7e3d1d00b'
+          ref: 'e15893bdc6dc4cad4d67e1e12d98261dc47a9758'
           persist-credentials: false
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
