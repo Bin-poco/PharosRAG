@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: "Bin-poco/pr-review-harness"
-          ref: 'ac13e55d4127b36a35e66464933d6734c87d2541'
+          ref: 'ff9a0b1c881afe690e77124c59d7cb39bc218d4d'
           persist-credentials: false
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
@@ -48,10 +48,12 @@ jobs:
           HARNESS_MODEL: ${{ vars.HARNESS_MODEL || 'deepseek-flash' }}
           HARNESS_BASE_URL: ${{ vars.HARNESS_BASE_URL || 'https://api.deepseek.com' }}
           HARNESS_CI_PUBLISH: ${{ vars.HARNESS_PUBLISH || 'false' }}
+          HARNESS_CI_MEMORY: ${{ vars.HARNESS_MEMORY_ENABLED || 'false' }}
         shell: bash
         run: |
           args=()
           if [ "$HARNESS_CI_PUBLISH" = 'true' ]; then args+=(--send); fi
+          if [ "$HARNESS_CI_MEMORY" = 'true' ]; then args+=(--github-memory); fi
           uv run --frozen --no-dev pr-harness github-ci \
             --event-file "$GITHUB_EVENT_PATH" \
             --repository "$GITHUB_REPOSITORY" \

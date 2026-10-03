@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "pr-review-human-feedback",
+  "repo_id": "7d97a1df22075237fe07b9660dd998dcd605f1f1d7ac42db3ca832c646e5790e",
+  "records": [
+    {
+      "created_at": "2026-10-03T02:15:41.214546+00:00",
+      "text": "审查 examples/**/*.py 时，核对函数声明的空输入行为与实现是否一致。",
+      "path_glob": "examples/**/*.py",
+      "finding_id": "finding-fa36a3e2bb081d13",
+      "disposition": "accepted",
+      "source": "Maintainer confirmation in Codex, 2026-10-03",
+      "rule_key": "python.empty-input-contract",
+      "status": "active",
+      "expires_at": "2027-01-01T02:15:41.214546+00:00",
+      "source_run_id": "07a6f966d40742ce979788d97ce68abf",
+      "status_reason": null,
+      "updated_at": null,
+      "uid": "e2ec47adf4d64cd4b5239218a593e45a",
+      "replaced_by": null
+    }
+  ]
+}
